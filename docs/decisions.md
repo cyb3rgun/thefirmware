@@ -264,3 +264,46 @@ Asked of the architect and the founder: pages 21 to 57 of this datasheet, or
 the trzy reference the briefing names. With either in hand, the rest of task
 5 is a table of register constants and an afternoon, and none of the code
 around it changes.
+
+## D-013 A value in sdkconfig.defaults is ignored when the symbol has no prompt
+
+Decided in S01-B01, found on the bench rather than by reading. Worth an
+entry because it fails silently and costs an hour.
+
+`sdkconfig.defaults` carried `CONFIG_ESP_CONSOLE_UART_BAUDRATE=921600` from
+the first commit, and every generated `sdkconfig` came out holding 115200
+anyway. No warning, no error, and the build was perfectly happy.
+
+The reason is in `components/esp_system/Kconfig`:
+
+```
+config ESP_CONSOLE_UART_BAUDRATE
+    int
+    prompt "UART console baud rate" if ESP_CONSOLE_UART_CUSTOM
+    depends on ESP_CONSOLE_UART
+    default 115200
+```
+
+The symbol only carries a prompt under `ESP_CONSOLE_UART_CUSTOM`. A symbol
+without a prompt is not user settable, so Kconfig discards what
+`sdkconfig.defaults` says about it and keeps its own default. The fix is to
+choose CUSTOM rather than DEFAULT and to leave the two GPIO values at -1,
+which means the console keeps the pins it would have used anyway:
+
+```
+CONFIG_ESP_CONSOLE_UART_CUSTOM=y
+CONFIG_ESP_CONSOLE_UART_TX_GPIO=-1
+CONFIG_ESP_CONSOLE_UART_RX_GPIO=-1
+CONFIG_ESP_CONSOLE_UART_BAUDRATE=921600
+```
+
+The module hid the mistake, because `cgusb_link_start` configures UART0 to
+921600 itself and the protocol worked from the first try. Only the pistol
+stub, which has no such link and speaks over the plain console, showed it,
+as a port that transmitted steadily and decoded to nothing.
+
+Two things follow for the rest of the tree. A generated `sdkconfig` is the
+truth and `sdkconfig.defaults` is only a wish, so a value that matters is
+worth grepping for in the generated file once. And the generated files take
+precedence on later builds, so a corrected default needs the stale
+`sdkconfig.<target>` deleted before it takes.
