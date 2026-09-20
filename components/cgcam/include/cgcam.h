@@ -1,17 +1,24 @@
 /* cgcam: the PAJ7025R2 multiple object tracking sensor.
  *
- * Wiring on the Heltec V2 bench, VSPI with LoRa disabled, concept.md
- * section 5. The pin numbers on the right are the module's own, from table 1
- * of the PAJ7025R2 datasheet version 1.3.
+ * Wiring on the Heltec V2 bench, concept.md section 5 as clarified on
+ * 20 September 2026. The camera sits on free GPIOs rather than on the VSPI
+ * default pins, because LoRa holds 5, 18, 19 and 27 on this board and the
+ * bench does not disable it. ESP-IDF routes any pin through the GPIO matrix,
+ * which costs nothing worth measuring at 1 MHz.
  *
- *   ESP32 GPIO 5   ->  pin 10  G9/CSB    chip select, active low
- *   ESP32 GPIO 18  ->  pin 11  G10/SCK   clock
- *   ESP32 GPIO 19  <-  pin 12  G11/MISO  data out of the sensor
+ * The pin numbers on the right are the module's own, from table 1 of the
+ * PAJ7025R2 datasheet version 1.3.
+ *
+ *   ESP32 GPIO 21  ->  pin 10  G9/CSB    chip select, active low
+ *   ESP32 GPIO 22  ->  pin 11  G10/SCK   clock
+ *   ESP32 GPIO 17  <-  pin 12  G11/MISO  data out of the sensor
  *   ESP32 GPIO 23  ->  pin 13  G12/MOSI  data into the sensor
  *   3V3            ->  pin 17  VDDMA
  *   GND            ->  pin 14  VSSD  and  pin 20  VSSD_LED, both required
  *   0.1 uF and 10 uF from VDDMA to GND, as close to the module pins as the
  *   flying wires allow (datasheet figure 13).
+ *
+ * None of these four clash with the OLED, which is on 4, 15 and 16.
  *
  * Voltage, and this one bites: VDDMA is 2.0 to 3.6 V with an absolute
  * maximum of 3.96 V, and every signal pin is limited to VDDMA + 0.3 V. The
@@ -77,12 +84,14 @@ typedef struct {
     int spi_mode; /* 0 to 3; the timing section of the datasheet is missing */
 } cgcam_config_t;
 
+/* Free pins on the Heltec V2, routed through the GPIO matrix. LoRa keeps
+ * 5, 18, 19 and 27; the OLED keeps 4, 15 and 16. */
 #define CGCAM_HELTEC_V2_CONFIG()                                      \
     (cgcam_config_t)                                                  \
     {                                                                 \
         .host = 2, /* SPI3_HOST */                                    \
-        .sck_gpio = 18, .miso_gpio = 19, .mosi_gpio = 23,             \
-        .cs_gpio = 5, .clock_hz = 1000000, .spi_mode = 3,             \
+        .sck_gpio = 22, .miso_gpio = 17, .mosi_gpio = 23,             \
+        .cs_gpio = 21, .clock_hz = 1000000, .spi_mode = 3,            \
     }
 
 esp_err_t cgcam_init(const cgcam_config_t *cfg);

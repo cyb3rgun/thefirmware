@@ -39,6 +39,28 @@ Four clusters of three TSHG6400, 850 nm, 100 mA each, one MOSFET per cluster on 
 
 PAJ7025R2 over SPI (VSPI on the Heltec bench: 5, 18, 19, 23 with LoRa disabled; own host on the S3 in series), 1 to 2 MHz on flying wires, up to 14 MHz on the board, 0.1 uF and 10 uF at the module pins, up to 16 objects at up to 200 frames per second, 4095 x 4095 interpolated. The bench reads objects; the aim computation (homography from four points, then zeroing offset from NVS) comes when the beacons exist.
 
+Bench wiring, clarified 20 September 2026. The VSPI default pins are not
+usable on the Heltec V2 bench: LoRa holds 5, 18, 19 and 27 on that board and
+the bench leaves it wired. The camera therefore sits on free pins, routed
+through the ESP32 GPIO matrix, which costs nothing worth measuring at 1 MHz.
+The pin numbers on the right are the PAJ7025R2 module's own, from table 1 of
+its datasheet.
+
+| ESP32 | Direction | Module pin | Signal |
+| --- | --- | --- | --- |
+| GPIO 21 | out | 10 | G9/CSB, chip select, active low |
+| GPIO 22 | out | 11 | G10/SCK |
+| GPIO 17 | in | 12 | G11/MISO |
+| GPIO 23 | out | 13 | G12/MOSI |
+| 3V3 | power | 17 | VDDMA |
+| GND | power | 14 and 20 | VSSD and VSSD_LED, both required |
+
+None of the four clash with the OLED, which keeps 4, 15 and 16. VDDMA takes
+2.0 to 3.6 V and the part dies above 3.96 V, so the 5 V supply that feeds the
+beacon clusters must not reach this module or any of its pins; at 3.3 V no
+level shifter is needed in either direction. The 0.1 uF and 10 uF sit at the
+module pins as the paragraph above already says.
+
 ## 6. Seasons
 
 S01 goal: a Heltec V2 as module drives four clusters, hears a second Heltec as pistol stub, acknowledges, forwards over USB per `usb-protocol.md`, and theclient on a PC receives the shots; a Heltec with the PAJ7025R2 reports objects it sees. Aim computation, the S3 pistol, IMU and recoil are later seasons.

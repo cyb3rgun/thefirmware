@@ -69,11 +69,12 @@ static void report_silence(void)
     ESP_LOGE(TAG, " 3. 0.1 uF and 10 uF sit from VDDMA to GND as close to the");
     ESP_LOGE(TAG, "    module pins as the flying wires allow.");
     ESP_LOGE(TAG, " 4. The four signals go to the right pins and are not swapped:");
-    ESP_LOGE(TAG, "    GPIO 5 to pin 10 CSB, GPIO 18 to pin 11 SCK,");
-    ESP_LOGE(TAG, "    GPIO 19 from pin 12 MISO, GPIO 23 to pin 13 MOSI.");
+    ESP_LOGE(TAG, "    GPIO 21 to pin 10 CSB, GPIO 22 to pin 11 SCK,");
+    ESP_LOGE(TAG, "    GPIO 17 from pin 12 MISO, GPIO 23 to pin 13 MOSI.");
     ESP_LOGE(TAG, "    MISO is the one that is easy to get backwards.");
-    ESP_LOGE(TAG, " 5. LoRa is off. The radio shares 5, 18, 19 on the Heltec V2");
-    ESP_LOGE(TAG, "    and will fight the camera for them.");
+    ESP_LOGE(TAG, " 5. Nothing else drives those four. LoRa holds 5, 18, 19, 27");
+    ESP_LOGE(TAG, "    and the OLED holds 4, 15, 16, which is why the camera");
+    ESP_LOGE(TAG, "    sits on 17, 21, 22 and 23 through the GPIO matrix.");
     ESP_LOGE(TAG, " 6. The wires are short. The pins drive 4 mA into 100 pF;");
     ESP_LOGE(TAG, "    this build clocks at %d Hz for that reason.", CONFIG_CGCAM_CLOCK_HZ);
     ESP_LOGE(TAG, " 7. Logic levels, with a scope on SCK: a high must clear");
