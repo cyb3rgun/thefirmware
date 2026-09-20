@@ -1,10 +1,9 @@
 /* cgcam: the PAJ7025R2 multiple object tracking sensor.
  *
  * Wiring on the Heltec V2 bench, concept.md section 5 as clarified on
- * 20 September 2026. The camera sits on free GPIOs rather than on the VSPI
- * default pins, because LoRa holds 5, 18, 19 and 27 on this board and the
- * bench does not disable it. ESP-IDF routes any pin through the GPIO matrix,
- * which costs nothing worth measuring at 1 MHz.
+ * 20 September 2026. The camera sits on free GPIOs rather than the VSPI
+ * default pins, because LoRa holds 5, 18, 19 and 27 on this board. ESP-IDF
+ * routes any pin through the GPIO matrix, which costs nothing at 1 MHz.
  *
  * The pin numbers on the right are the module's own, from table 1 of the
  * PAJ7025R2 datasheet version 1.3.
@@ -18,8 +17,6 @@
  *   0.1 uF and 10 uF from VDDMA to GND, as close to the module pins as the
  *   flying wires allow (datasheet figure 13).
  *
- * None of these four clash with the OLED, which is on 4, 15 and 16.
- *
  * Voltage, and this one bites: VDDMA is 2.0 to 3.6 V with an absolute
  * maximum of 3.96 V, and every signal pin is limited to VDDMA + 0.3 V. The
  * 5 V supply that feeds the beacon clusters must not reach this module or
@@ -30,14 +27,17 @@
  * Clock: the part does up to 14 MHz on a board, but its pins are specified
  * into 100 pF and drive 4 mA, so flying wires get 1 to 2 MHz.
  *
- * What this component cannot do yet, and why: the copy of the datasheet in
- * THEHARDWARE stops at page 20. The SPI data format (section 6.1.2, page
- * 26), the initialisation flow (7.1.1, page 33), the product ID register
- * (7.1.3, page 34), the bank switching (7.3.2, page 40) and the output
- * access (7.4, page 42) are all past the end of the file. Rather than
- * inventing a register map, cgcam_probe sweeps the plausible transaction
- * encodings and the whole register space and reports where the sensor
- * actually answers with 0x7025. See D-012.
+ * The bus is unusual in three ways and all three have to be right together
+ * or nothing answers (D-015):
+ *
+ *   1. SPI mode 3, and LSB first. Bit order is the one that is never
+ *      guessed, because every other sensor on the bench is MSB first.
+ *   2. A transaction is a command byte, then the register, then the data.
+ *      The command is 0x00 to write, 0x80 to read one byte and 0x81 to
+ *      burst read. The register address does not carry the direction bit.
+ *   3. Chip select is held across a bank switch and the operation that
+ *      follows it, so it cannot be the hardware chip select that ESP-IDF
+ *      drives per transaction. cgcam drives it as an ordinary GPIO.
  */
 #pragma once
 
@@ -54,80 +54,101 @@ extern "C" {
 #define CGCAM_MAX_OBJECTS 16
 #define CGCAM_PRODUCT_ID 0x7025u
 
-/* How a register access is laid out on the wire. The datasheet pages that
- * would say which of these is right are missing, so the bench finds out by
- * asking the silicon. D-012. */
-typedef enum {
-    /* read: send the address with bit 7 clear, then clock one byte out.
-     * write: send the address with bit 7 set, then the value. */
-    CGCAM_FMT_READ_LOW = 0,
-    /* the same, with the sense of bit 7 swapped */
-    CGCAM_FMT_READ_HIGH,
-    /* read: address with bit 7 clear, one dummy byte, then the value */
-    CGCAM_FMT_READ_LOW_DUMMY,
-    /* read: address with bit 7 set, one dummy byte, then the value */
-    CGCAM_FMT_READ_HIGH_DUMMY,
-    CGCAM_FMT_COUNT,
-} cgcam_format_t;
-
-/* The register that selects the bank, on every PixArt part that has banks.
- * Confirm against section 7.3.2 when the full datasheet arrives. */
+/* The register that selects the bank, in every bank. */
 #define CGCAM_REG_BANK 0xEFu
 
+/* Product ID, bank 0, low byte then high byte. */
+#define CGCAM_BANK_ID 0x00u
+#define CGCAM_REG_ID_LOW 0x02u
+#define CGCAM_REG_ID_HIGH 0x03u
+
+/* Frame period, bank 0x0C, three bytes in units of 100 ns. */
+#define CGCAM_BANK_SETTINGS 0x0Cu
+#define CGCAM_REG_FRAME_PERIOD 0x07u
+
+/* The four output formats. The value is what goes into the bank register to
+ * expose that report, and the size is how many bytes the burst read then
+ * returns from register 0. Format 1 is the only one that carries every
+ * field, so it is what the bench uses. */
+typedef enum {
+    CGCAM_FORMAT_1 = 1, /* 256 bytes, 16 bytes per object, all fields */
+    CGCAM_FORMAT_2 = 2, /* 96 bytes, area and centre only */
+    CGCAM_FORMAT_3 = 3, /* 144 bytes */
+    CGCAM_FORMAT_4 = 4, /* 208 bytes */
+} cgcam_format_t;
+
 typedef struct {
-    int host;  /* SPI host, SPI3_HOST is VSPI on the ESP32 */
+    int host; /* SPI host, 2 is SPI3_HOST on the ESP32 */
     int sck_gpio;
     int miso_gpio;
     int mosi_gpio;
-    int cs_gpio;
+    int cs_gpio; /* driven by cgcam, not by the SPI peripheral */
     int clock_hz;
-    int spi_mode; /* 0 to 3; the timing section of the datasheet is missing */
 } cgcam_config_t;
 
-/* Free pins on the Heltec V2, routed through the GPIO matrix. LoRa keeps
- * 5, 18, 19 and 27; the OLED keeps 4, 15 and 16. */
 #define CGCAM_HELTEC_V2_CONFIG()                                      \
     (cgcam_config_t)                                                  \
     {                                                                 \
-        .host = 2, /* SPI3_HOST */                                    \
+        .host = 2,                                                    \
         .sck_gpio = 22, .miso_gpio = 17, .mosi_gpio = 23,             \
-        .cs_gpio = 21, .clock_hz = 1000000, .spi_mode = 3,            \
+        .cs_gpio = 21, .clock_hz = 1000000,                           \
     }
+
+/* One tracked object. The centre is 12 bits per axis, which is the
+ * 4095 by 4095 interpolated grid of concept.md section 5. The boundary and
+ * radius fields are in raw sensor pixels, of which there are 98 by 98. */
+typedef struct {
+    uint16_t area; /* 14 bits */
+    uint16_t cx;   /* 12 bits, 0 is left */
+    uint16_t cy;   /* 12 bits, 0 is top */
+    uint8_t average_brightness;
+    uint8_t max_brightness;
+    uint8_t range;  /* 4 bits */
+    uint8_t radius; /* 4 bits */
+    uint8_t boundary_left;
+    uint8_t boundary_right;
+    uint8_t boundary_up;
+    uint8_t boundary_down;
+    uint8_t aspect_ratio;
+    uint8_t vx;
+    uint8_t vy;
+} cgcam_object_t;
+
+typedef struct {
+    int count; /* how many of the sixteen slots carry an object */
+    cgcam_object_t object[CGCAM_MAX_OBJECTS];
+} cgcam_frame_t;
 
 esp_err_t cgcam_init(const cgcam_config_t *cfg);
 
-/* Raw full duplex transfer with chip select held over the whole of it. */
-esp_err_t cgcam_xfer(const uint8_t *tx, uint8_t *rx, size_t len);
-
-void cgcam_set_format(cgcam_format_t format);
-cgcam_format_t cgcam_format(void);
-const char *cgcam_format_name(cgcam_format_t format);
-
-esp_err_t cgcam_read_reg(uint8_t reg, uint8_t *value);
-esp_err_t cgcam_write_reg(uint8_t reg, uint8_t value);
-esp_err_t cgcam_select_bank(uint8_t bank);
-
-/* Reads the two bytes that hold the product ID, using the addresses and the
- * format that cgcam_probe found, or the defaults when nothing was probed.
- * Returns ESP_ERR_NOT_FOUND when the answer is not 0x7025. */
+/* Reads the product ID from bank 0. Returns ESP_ERR_NOT_FOUND when the
+ * answer is not 0x7025, and still writes what it saw to id. */
 esp_err_t cgcam_product_id(uint16_t *id);
 
-typedef struct {
-    cgcam_format_t format;
-    uint8_t bank;
-    uint8_t reg_low;  /* the register holding 0x25 */
-    bool big_endian;  /* true when 0x70 came first */
-} cgcam_probe_hit_t;
+/* Writes the initial settings the datasheet asks for before the sensor
+ * reports anything useful. cgcam_init has already done this. */
+esp_err_t cgcam_load_initial_settings(void);
 
-/* Sweeps the transaction encodings, the banks and the register space looking
- * for the 0x7025 signature, and remembers the first hit so that
- * cgcam_read_reg and cgcam_product_id work afterwards. Returns how many hits
- * were found, or a negative esp_err_t. banks_to_try of 1 stays on whatever
- * bank the sensor powered up in. */
-int cgcam_probe(cgcam_probe_hit_t *hits, int max_hits, int banks_to_try);
+esp_err_t cgcam_read_reg(uint8_t bank, uint8_t reg, uint8_t *value);
+esp_err_t cgcam_write_reg(uint8_t bank, uint8_t reg, uint8_t value);
 
-/* Reads len bytes starting at reg, chip select held for the whole burst. */
-esp_err_t cgcam_burst_read(uint8_t reg, uint8_t *buf, size_t len);
+/* Frame period in microseconds, as the sensor is currently configured. */
+esp_err_t cgcam_frame_period_us(uint32_t *period_us);
+
+/* Reads one report and parses it. An object slot with zero area and a
+ * centre of 0xFFF is empty, which is how count is arrived at. */
+esp_err_t cgcam_read_frame(cgcam_frame_t *frame, cgcam_format_t format);
+
+/* The raw report, for looking at bytes when the parse is in doubt. buf must
+ * hold cgcam_format_size(format) bytes. */
+esp_err_t cgcam_read_report(uint8_t *buf, cgcam_format_t format);
+size_t cgcam_format_size(cgcam_format_t format);
+
+/* Confirms on silicon what the reference says: sweeps the banks for the
+ * product ID and reports where it answered. Kept because a register map
+ * read out of somebody else's driver is a claim until the part agrees with
+ * it (D-015). Returns the number of banks that answered 0x7025. */
+int cgcam_probe(uint8_t *bank_out);
 
 #ifdef __cplusplus
 }

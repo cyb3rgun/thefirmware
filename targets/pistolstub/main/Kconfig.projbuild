@@ -39,11 +39,21 @@ config CGPISTOL_RATE_MS
 config CGPISTOL_ACK_TIMEOUT_MS
     int "Milliseconds to wait for the module's acknowledgement"
     range 2 1000
-    default 20
+    default 8
     help
-        concept.md principle 1 puts the radio round trip in single digit
-        milliseconds, so 20 ms is generous and still lets all four
-        transmissions of one shot finish inside 80 ms.
+        Was 20 ms, chosen before any number existed. The S01-B01 bench
+        measured a median round trip of 2.6 ms and a worst clean round trip
+        of 5.6 ms at 3 m, so 20 ms was not generous, it was idle waiting: a
+        shot that is going to fail has already failed by about 6 ms.
+
+        At 5 m through a wall, twelve shots of a hundred needed a resend and
+        the p95 rose from 4.7 ms to 22.4 ms, which is one 20 ms timeout plus
+        one median almost to the microsecond. The tail was this constant,
+        not the radio.
+
+        8 ms sits above the worst clean round trip seen with headroom, and
+        puts all four transmissions of one shot inside 32 ms instead of
+        80 ms. See docs/measurements.md.
 
 config CGPISTOL_RUN_SHOTS
     int "Shots per run, 0 to never summarise"

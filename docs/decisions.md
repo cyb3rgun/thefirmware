@@ -265,6 +265,13 @@ the trzy reference the briefing names. With either in hand, the rest of task
 5 is a table of register constants and an afternoon, and none of the code
 around it changes.
 
+Superseded in part by D-015 on 20 September 2026: the founder allowed the
+trzy reference to be read, and the register map is now derived and
+implemented. The four transaction encodings this entry describes were all
+wrong, which is worth keeping visible: the real one is a command byte before
+the register, and the bus is LSB first. What remains open here is the
+datasheet text itself, which the reference does not replace.
+
 ## D-013 A value in sdkconfig.defaults is ignored when the symbol has no prompt
 
 Decided in S01-B01, found on the bench rather than by reading. Worth an
@@ -354,3 +361,60 @@ bench annexe or should stay a firmware side arrangement.
 timer would add shots to a radio started run and spoil the count. The timer
 is the fallback, the radio is the normal way to drive a bench, and the PRG
 button still fires a single shot whatever either is set to.
+
+## D-015 The PAJ7025R2 bus, derived from the trzy reference, to be confirmed on silicon
+
+Decided in S01-B01, after the founder allowed the reference to be read.
+This closes the part of D-012 that blocked the code. It does not close the
+part that needs hardware.
+
+`github.com/trzy/PixArt` is the reference the briefing names: "PAJ7025R2 for
+6dof tracking: code (Arduino, Windows) and PCB (KiCad)". It was cloned to a
+scratch directory outside this tree, read, and not copied. It carries no
+licence file, which is one more reason to take facts from it and nothing
+else. What was taken is how the silicon behaves, which is not anyone's to
+own; what was left is every line of their code.
+
+Three things about this bus have to be right together or the part is simply
+mute, and not one of them is a default:
+
+| Thing | Value | Why it would not have been guessed |
+| --- | --- | --- |
+| Bit order | LSB first | Every other device on this bench is MSB first, and ESP-IDF defaults to MSB first. |
+| Transaction shape | command byte, then register, then data | The command leads: 0x00 write, 0x80 read one byte, 0x81 burst read. The register address carries no direction bit, which is the usual convention and is wrong here. |
+| Chip select | held across a bank switch and the operation after it | So it cannot be the peripheral's automatic chip select, which drops between transactions. cgcam drives it as an ordinary GPIO. |
+
+The rest of the map:
+
+| Subject | Where |
+| --- | --- |
+| Bank select | register 0xEF, in every bank |
+| Product ID 0x7025 | bank 0, register 0x02 low and 0x03 high |
+| Frame period | bank 0x0C, registers 0x07 to 0x09, 24 bit, units of 100 ns |
+| Report | write the format code to 0xEF, then burst read from register 0 |
+| Format codes | 5 gives 256 bytes, 9 gives 96, 10 gives 144, 11 gives 208 |
+| Object stride | 16 bytes in format 1, sixteen objects |
+
+Object fields in format 1, and the bit widths are the sensor's own: area is
+14 bits across bytes 0 and 1, the centre is 12 bits per axis across bytes 2
+to 5, which is the 4095 by 4095 grid `concept.md` section 5 names. Average
+and maximum brightness are bytes 6 and 7. Range and radius share byte 8, 4
+bits each. The four boundaries are bytes 9 to 12 at 7 bits, because the
+array is 98 pixels across. Aspect ratio, vx and vy are bytes 13 to 15.
+
+The initial settings are a flat list of register writes in
+`components/cgcam/cgcam.c`. They are datasheet section 7.1.2 content,
+hardware configuration values rather than a program, and the list is flat on
+purpose so that nobody reorders it.
+
+**This is a claim until the part agrees with it.** Everything above was read
+out of somebody else's driver for a different board and a different
+toolchain, and the camera board on this bench is not wired yet.
+`cgcam_probe` sweeps the banks for the product ID and is kept for exactly
+that: the first run on real silicon either confirms the map or says which
+part of it is wrong. Until that run happens the camera rows of
+`docs/measurements.md` stay empty.
+
+Still wanted, and still worth having: pages 21 to 57 of the datasheet. The
+reference gives the values but not the reasoning, and a bench that has to
+change the frame rate, the gain or the exposure will want the text.

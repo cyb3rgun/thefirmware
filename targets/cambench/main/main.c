@@ -1,19 +1,19 @@
 /* Target cambench, S01 bench.
  *
- * Brings up the PAJ7025R2 on VSPI and reports what it finds. See cgcam.h for
- * the wiring, the voltage limits and the clock.
+ * Brings up the PAJ7025R2 and prints the objects it sees. See cgcam.h for
+ * the wiring, the voltage limits and the three unusual things about the bus,
+ * and D-015 for where the register map came from.
  *
  * S01-B01 task 5 says to stop and report if the module does not answer the
- * product ID register, with the wiring and the logic level checked. This
- * firmware does that: it sweeps the plausible transaction encodings and the
- * whole register space, and if 0x7025 never comes back it prints the
- * checklist and stops instead of pretending to see objects.
+ * product ID register, with the wiring and the logic level checked. That is
+ * what happens: the checklist is printed and the frame loop never starts.
  *
  * Flash method, D-004:
- *   tools\cgflash.ps1 cambench COM8 build flash monitor
+ *   tools\cgflash.ps1 cambench COM6 build flash monitor
  */
 
 #include <inttypes.h>
+#include <stdio.h>
 #include <string.h>
 
 #include "esp_log.h"
@@ -26,38 +26,20 @@
 
 static const char *TAG = "cambench";
 
-#define PROBE_HITS_MAX 8
-
 static struct {
-    bool alive;
     uint16_t product_id;
-    cgcam_probe_hit_t hits[PROBE_HITS_MAX];
-    int hit_count;
-
+    uint32_t frame_period_us;
     uint32_t frames;
-    uint32_t changed; /* frames whose window differed from the one before */
+    uint32_t frames_with_objects;
+    int last_count;
+    int max_count;
 } g;
-
-static void show(const char *line3, const char *line4)
-{
-    if (!cgoled_present()) {
-        return;
-    }
-    cgoled_clear();
-    cgoled_text(0, 0, "CYB3RGUN CAMBENCH");
-    cgoled_rule(1);
-    cgoled_printf(0, 2, "PAJ7025R2 %s", g.alive ? "FOUND" : "SILENT");
-    cgoled_text(0, 3, line3);
-    cgoled_text(0, 4, line4);
-    cgoled_flush();
-}
 
 static void report_silence(void)
 {
     ESP_LOGE(TAG, "");
-    ESP_LOGE(TAG, "STOP: the module never answered with the product id 0x7025.");
-    ESP_LOGE(TAG, "None of the %d transaction encodings found it in any bank.",
-             CGCAM_FMT_COUNT);
+    ESP_LOGE(TAG, "STOP: the module did not answer with the product id 0x7025.");
+    ESP_LOGE(TAG, "It read back 0x%04X instead.", g.product_id);
     ESP_LOGE(TAG, "");
     ESP_LOGE(TAG, "Check, in this order:");
     ESP_LOGE(TAG, " 1. VDDMA on pin 17 reads 3.3 V against pin 14. The part takes");
@@ -82,64 +64,79 @@ static void report_silence(void)
     ESP_LOGE(TAG, "    3.3 V, so a low reading means a wiring or a supply fault,");
     ESP_LOGE(TAG, "    not a level mismatch. No shifter is needed at 3.3 V.");
     ESP_LOGE(TAG, "");
-    ESP_LOGE(TAG, "If all seven check out, the register map is the next suspect:");
-    ESP_LOGE(TAG, "the datasheet in THEHARDWARE stops at page 20 and the SPI data");
-    ESP_LOGE(TAG, "format is on page 26. See D-012.");
+    ESP_LOGE(TAG, "If all seven check out, the bus settings are the next suspect.");
+    ESP_LOGE(TAG, "This build uses SPI mode 3, LSB first, and a command byte of");
+    ESP_LOGE(TAG, "0x80 before the register for a read. All three have to be");
+    ESP_LOGE(TAG, "right together or nothing answers. See D-015.");
     ESP_LOGE(TAG, "");
 
-    show("SEE THE SERIAL", "LOG FOR THE LIST");
+    if (cgoled_present()) {
+        cgoled_clear();
+        cgoled_text(0, 0, "CYB3RGUN CAMBENCH");
+        cgoled_rule(1);
+        cgoled_text(0, 2, "PAJ7025R2 SILENT");
+        cgoled_printf(0, 3, "READ 0x%04X", g.product_id);
+        cgoled_text(0, 5, "SEE THE SERIAL");
+        cgoled_text(0, 6, "LOG FOR THE LIST");
+        cgoled_flush();
+    }
 }
 
 static void bench_task(void *arg)
 {
     (void)arg;
 
-    uint8_t window[CONFIG_CGCAM_DUMP_LEN];
-    uint8_t previous[CONFIG_CGCAM_DUMP_LEN];
-    char line[3 * CONFIG_CGCAM_DUMP_LEN + 1];
     const TickType_t period = pdMS_TO_TICKS(1000 / CONFIG_CGCAM_FPS);
-
-    memset(previous, 0, sizeof(previous));
     TickType_t next = xTaskGetTickCount();
     int64_t last_print = 0;
+    cgcam_frame_t frame;
 
     for (;;) {
         vTaskDelayUntil(&next, (period > 0) ? period : 1);
 
-        if (cgcam_burst_read(CONFIG_CGCAM_DUMP_REG, window, sizeof(window)) != ESP_OK) {
+        if (cgcam_read_frame(&frame, CGCAM_FORMAT_1) != ESP_OK) {
             continue;
         }
         g.frames++;
-        if (memcmp(window, previous, sizeof(window)) != 0) {
-            g.changed++;
-            memcpy(previous, window, sizeof(window));
+        g.last_count = frame.count;
+        if (frame.count > 0) {
+            g.frames_with_objects++;
+        }
+        if (frame.count > g.max_count) {
+            g.max_count = frame.count;
         }
 
-        /* One line a second, not fifty. The frame loop runs at the full rate
-         * so that the timing is real; only the printing is thinned out. */
+        /* The loop runs at the full rate so the timing is real; only the
+         * printing is thinned out, or the port becomes the bottleneck. */
         const int64_t now = esp_timer_get_time();
-        if (now - last_print < 1000000) {
+        if (now - last_print < 1000000 / CONFIG_CGCAM_PRINT_HZ) {
             continue;
         }
         last_print = now;
 
-        int at = 0;
-        for (size_t i = 0; i < sizeof(window); i++) {
-            at += snprintf(&line[at], sizeof(line) - (size_t)at, "%02X ", window[i]);
+        char line[256];
+        int at = snprintf(line, sizeof(line), "objects %d:", frame.count);
+        for (int i = 0; i < frame.count && at < (int)sizeof(line) - 24; i++) {
+            const cgcam_object_t *o = &frame.object[i];
+            at += snprintf(&line[at], sizeof(line) - (size_t)at, " [%u,%u a=%u b=%u]", o->cx,
+                           o->cy, o->area, o->max_brightness);
         }
-        ESP_LOGI(TAG, "frames %" PRIu32 " changed %" PRIu32 " | %s", g.frames, g.changed, line);
+        ESP_LOGI(TAG, "%s", line);
 
         if (cgoled_present()) {
             cgoled_clear();
             cgoled_text(0, 0, "CYB3RGUN CAMBENCH");
             cgoled_rule(1);
-            cgoled_printf(0, 2, "ID %04X OK", g.product_id);
-            cgoled_printf(0, 3, "FMT %d BANK %d", (int)cgcam_format(), g.hits[0].bank);
-            cgoled_printf(0, 4, "REG %02X LEN %d", CONFIG_CGCAM_DUMP_REG,
-                          CONFIG_CGCAM_DUMP_LEN);
-            cgoled_printf(0, 5, "FRAMES %" PRIu32, g.frames);
-            cgoled_printf(0, 6, "CHANGED %" PRIu32, g.changed);
-            cgoled_text(0, 7, "OBJECTS: SEE D-012");
+            cgoled_printf(0, 2, "OBJECTS %d", frame.count);
+            cgoled_printf(0, 3, "MAX SEEN %d", g.max_count);
+            if (frame.count > 0) {
+                cgoled_printf(0, 4, "X %u Y %u", frame.object[0].cx, frame.object[0].cy);
+                cgoled_printf(0, 5, "AREA %u", frame.object[0].area);
+            } else {
+                cgoled_text(0, 4, "NOTHING IN VIEW");
+            }
+            cgoled_printf(0, 6, "FRAMES %" PRIu32, g.frames);
+            cgoled_printf(0, 7, "ID %04X %" PRIu32 "US", g.product_id, g.frame_period_us);
             cgoled_flush();
         }
     }
@@ -151,49 +148,45 @@ void app_main(void)
     if (cgoled_init(&oled) != ESP_OK) {
         ESP_LOGW(TAG, "no OLED, carrying on without it");
     }
-    show("PROBING...", "");
+    if (cgoled_present()) {
+        cgoled_clear();
+        cgoled_text(0, 0, "CYB3RGUN CAMBENCH");
+        cgoled_rule(1);
+        cgoled_text(0, 2, "STARTING...");
+        cgoled_flush();
+    }
 
     cgcam_config_t cam = CGCAM_HELTEC_V2_CONFIG();
     cam.clock_hz = CONFIG_CGCAM_CLOCK_HZ;
-    cam.spi_mode = CONFIG_CGCAM_SPI_MODE;
     ESP_ERROR_CHECK(cgcam_init(&cam));
 
-    ESP_LOGI(TAG, "sweeping %d encodings over %d bank(s) and 256 registers",
-             CGCAM_FMT_COUNT, CONFIG_CGCAM_PROBE_BANKS);
-    g.hit_count = cgcam_probe(g.hits, PROBE_HITS_MAX, CONFIG_CGCAM_PROBE_BANKS);
-
-    if (g.hit_count <= 0) {
-        g.alive = false;
-        report_silence();
-        /* Stop, as the briefing asks. The board stays up so the log can be
-         * read and the display stays on. */
-        for (;;) {
-            vTaskDelay(pdMS_TO_TICKS(1000));
+    const esp_err_t id_err = cgcam_product_id(&g.product_id);
+    if (id_err != ESP_OK) {
+        /* Before giving up, ask every bank, in case the map moved. */
+        uint8_t bank = 0;
+        if (cgcam_probe(&bank) > 0) {
+            ESP_LOGW(TAG, "the id is in bank %u, not where it was expected", bank);
+        } else {
+            report_silence();
+            /* Stop, as the briefing asks. The board stays up so the log can
+             * be read and the display stays on. */
+            for (;;) {
+                vTaskDelay(pdMS_TO_TICKS(1000));
+            }
         }
     }
 
-    g.alive = true;
-    if (cgcam_product_id(&g.product_id) != ESP_OK) {
-        ESP_LOGW(TAG, "the sweep found 0x7025 but the reread did not agree");
+    ESP_LOGI(TAG, "PAJ7025R2 answered, product id 0x%04X", g.product_id);
+
+    if (cgcam_frame_period_us(&g.frame_period_us) == ESP_OK) {
+        ESP_LOGI(TAG, "sensor frame period %" PRIu32 " us, about %" PRIu32 " fps",
+                 g.frame_period_us,
+                 (g.frame_period_us > 0) ? (1000000u / g.frame_period_us) : 0u);
     }
 
-    ESP_LOGI(TAG, "");
-    ESP_LOGI(TAG, "PAJ7025R2 answered. %d place(s) in the map carry 0x7025:", g.hit_count);
-    for (int i = 0; i < g.hit_count && i < PROBE_HITS_MAX; i++) {
-        ESP_LOGI(TAG, "  bank %u reg 0x%02X  %s  %s", g.hits[i].bank, g.hits[i].reg_low,
-                 cgcam_format_name(g.hits[i].format),
-                 g.hits[i].big_endian ? "big endian" : "little endian");
-    }
-    ESP_LOGI(TAG, "");
-    ESP_LOGI(TAG, "Put these lines in docs/measurements.md. They pin down the SPI");
-    ESP_LOGI(TAG, "data format of datasheet section 6.1.2 and the product id");
-    ESP_LOGI(TAG, "register of section 7.1.3, which the truncated copy in");
-    ESP_LOGI(TAG, "THEHARDWARE does not contain. See D-012.");
-    ESP_LOGI(TAG, "");
-    ESP_LOGI(TAG, "Reading %d bytes from register 0x%02X at %d fps.", CONFIG_CGCAM_DUMP_LEN,
-             CONFIG_CGCAM_DUMP_REG, CONFIG_CGCAM_FPS);
-    ESP_LOGI(TAG, "Object count and coordinates need the output access map of");
-    ESP_LOGI(TAG, "section 7.4, page 42, which is also past the end of the file.");
+    ESP_LOGI(TAG, "reading format 1, 16 objects, at %d fps, printing %d times a second",
+             CONFIG_CGCAM_FPS, CONFIG_CGCAM_PRINT_HZ);
+    ESP_LOGI(TAG, "coordinates are 0 to 4095 on both axes");
 
     xTaskCreate(bench_task, "cg_bench", 4096, NULL, 6, NULL);
 }
