@@ -94,6 +94,11 @@ static struct {
     uint8_t last_pistol[6];
     int8_t last_rssi;
     int64_t last_time_mark_us;
+
+    /* bench only, D-014 */
+    uint16_t bench_run_id;
+    uint32_t bench_heard_at_start;
+    uint32_t bench_acked_at_start;
 } g;
 
 static pending_t s_pending[PENDING_MAX];
@@ -414,6 +419,84 @@ static void handle_shot(const radio_rx_t *rx)
     forward_queue(&frame);
 }
 
+/* Bench only, D-014. The pistol sits on a power bank with no cable to the
+ * PC, so the run is started over the radio and its result comes back the
+ * same way, and everything is read on the module's port. */
+static void bench_start(uint16_t shots, uint16_t rate_ms)
+{
+    g.bench_run_id++;
+
+    cgproto_start_t start = {
+        .type = CGPROTO_START,
+        .run_id = g.bench_run_id,
+        .shots = shots,
+        .rate_ms = rate_ms,
+    };
+    memcpy(start.module_mac, g.mac, 6);
+    cgproto_seal(&start, sizeof(start));
+
+    /* There is no acknowledgement for start, and a lost one stalls the
+     * bench, so it goes out three times. The pistol takes the first copy
+     * and ignores the rest by run id. */
+    for (int i = 0; i < 3; i++) {
+        esp_now_send(BROADCAST, (const uint8_t *)&start, sizeof(start));
+        vTaskDelay(pdMS_TO_TICKS(20));
+    }
+
+    /* The counters below are what the run will be compared against. */
+    g.bench_heard_at_start = g.shots_heard;
+    g.bench_acked_at_start = g.shots_acked;
+
+    ESP_LOGI(TAG, "bench run %u started, %u shots every %u ms", (unsigned)g.bench_run_id,
+             (unsigned)shots, (unsigned)rate_ms);
+}
+
+static void handle_report(const radio_rx_t *rx)
+{
+    const cgproto_report_t *r = (const cgproto_report_t *)rx->data;
+
+    if (r->run_id != g.bench_run_id) {
+        ESP_LOGW(TAG, "report for run %u arrived late, this is run %u",
+                 (unsigned)r->run_id, (unsigned)g.bench_run_id);
+        return;
+    }
+
+    /* The status line asked for on COM7. It is plain text, so it sits
+     * between frames and the host tool passes it through (D-006). */
+    ESP_LOGI(TAG,
+             "REPORT run=%u pistol=%02X:%02X:%02X:%02X:%02X:%02X sent=%" PRIu32
+             " acked=%" PRIu32 " resends=%" PRIu32 " lost=%" PRIu32 " median_us=%" PRIu32
+             " p95_us=%" PRIu32 " mean_us=%" PRIu32 " min_us=%" PRIu32 " max_us=%" PRIu32
+             " rssi_pistol=%d rssi_module=%d heard=%" PRIu32 " forwarded=%" PRIu32,
+             (unsigned)r->run_id, r->pistol_mac[0], r->pistol_mac[1], r->pistol_mac[2],
+             r->pistol_mac[3], r->pistol_mac[4], r->pistol_mac[5], r->sent, r->acked,
+             r->resends, r->lost, r->median_us, r->p95_us, r->mean_us, r->min_us, r->max_us,
+             r->rssi, rx->rssi, g.shots_heard - g.bench_heard_at_start,
+             g.shots_acked - g.bench_acked_at_start);
+
+    if (!g.core_hello) {
+        return;
+    }
+
+    const cgusb_bench_report_t out = {
+        .run_id = r->run_id,
+        .sent = r->sent,
+        .acked = r->acked,
+        .resends = r->resends,
+        .lost = r->lost,
+        .median_us = r->median_us,
+        .p95_us = r->p95_us,
+        .mean_us = r->mean_us,
+        .min_us = r->min_us,
+        .max_us = r->max_us,
+        .rssi_at_pistol = r->rssi,
+        .rssi_at_module = rx->rssi,
+    };
+    cgusb_bench_report_t frame = out;
+    memcpy(frame.pistol_id, r->pistol_mac, 6);
+    cgusb_link_send(CGUSB_MSG_BENCH_REPORT, &frame, sizeof(frame));
+}
+
 static void handle_hello(const radio_rx_t *rx)
 {
     const cgproto_hello_t *hello = (const cgproto_hello_t *)rx->data;
@@ -454,6 +537,9 @@ static void radio_task(void *arg)
             break;
         case CGPROTO_HELLO:
             handle_hello(&rx);
+            break;
+        case CGPROTO_REPORT:
+            handle_report(&rx);
             break;
         default:
             break;
@@ -589,6 +675,11 @@ static void on_core_frame(uint8_t type, const uint8_t *payload, size_t len, void
     case CGUSB_MSG_STATUS_REQ:
         send_status();
         break;
+    case CGUSB_MSG_BENCH_START: {
+        const cgusb_bench_start_t *b = (const cgusb_bench_start_t *)payload;
+        bench_start(b->shots, b->rate_ms);
+        break;
+    }
     case CGUSB_MSG_REBOOT:
         ESP_LOGW(TAG, "reboot asked for by the core");
         vTaskDelay(pdMS_TO_TICKS(50));

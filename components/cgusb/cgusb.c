@@ -20,6 +20,8 @@ CGUSB_ASSERT_SIZE(cgusb_hello_ack_t, 11);
 CGUSB_ASSERT_SIZE(cgusb_shot_t, 30);
 CGUSB_ASSERT_SIZE(cgusb_status_t, 20);
 CGUSB_ASSERT_SIZE(cgusb_pistol_seen_t, 7);
+CGUSB_ASSERT_SIZE(cgusb_bench_start_t, 4);
+CGUSB_ASSERT_SIZE(cgusb_bench_report_t, 46);
 
 /* ----------------------------------------------------------------- crc -- */
 
@@ -141,6 +143,10 @@ int cgusb_payload_len(uint8_t type)
         return (int)sizeof(cgusb_status_t);
     case CGUSB_MSG_PISTOL_SEEN:
         return (int)sizeof(cgusb_pistol_seen_t);
+    case CGUSB_MSG_BENCH_START:
+        return (int)sizeof(cgusb_bench_start_t);
+    case CGUSB_MSG_BENCH_REPORT:
+        return (int)sizeof(cgusb_bench_report_t);
     case CGUSB_MSG_ERROR:
         return -1; /* one code byte plus 0 to 32 detail bytes */
     default:
@@ -361,6 +367,10 @@ const char *cgusb_type_name(uint8_t type)
         return "pistol_seen";
     case CGUSB_MSG_ERROR:
         return "error";
+    case CGUSB_MSG_BENCH_START:
+        return "bench_start";
+    case CGUSB_MSG_BENCH_REPORT:
+        return "bench_report";
     default:
         return "unknown";
     }

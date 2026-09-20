@@ -52,6 +52,15 @@ enum {
     CGUSB_MSG_STATUS = 0x83,
     CGUSB_MSG_PISTOL_SEEN = 0x84,
     CGUSB_MSG_ERROR = 0x85,
+
+    /* Bench only, added in S01-B01, D-014. They sit well outside the type
+     * space version 1 uses, 0x01 to 0x07 and 0x81 to 0x85, so a conformant
+     * implementation of the document never sends or expects them and is not
+     * affected by their existence. They let a measurement run be started and
+     * read entirely through the module's port, with the pistol on a power
+     * bank and no cable to the PC. */
+    CGUSB_MSG_BENCH_START = 0x7E,  /* core to module */
+    CGUSB_MSG_BENCH_REPORT = 0xFE, /* module to core */
 };
 
 /* beacons, mode byte */
@@ -164,6 +173,28 @@ typedef struct __attribute__((packed)) {
     uint8_t code;
     uint8_t detail[CGUSB_ERROR_DETAIL_MAX];
 } cgusb_error_t;
+
+/* Bench only, D-014. */
+typedef struct __attribute__((packed)) {
+    uint16_t shots;
+    uint16_t rate_ms;
+} cgusb_bench_start_t;
+
+typedef struct __attribute__((packed)) {
+    uint8_t pistol_id[6];
+    uint16_t run_id;
+    uint32_t sent;
+    uint32_t acked;
+    uint32_t resends;
+    uint32_t lost;
+    uint32_t median_us;
+    uint32_t p95_us;
+    uint32_t mean_us;
+    uint32_t min_us;
+    uint32_t max_us;
+    int8_t rssi_at_pistol; /* the module's ack as the pistol heard it */
+    int8_t rssi_at_module; /* the pistol's shots as the module heard them */
+} cgusb_bench_report_t;
 
 /* ----------------------------------------------------------- primitives -- */
 

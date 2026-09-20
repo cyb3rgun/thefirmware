@@ -20,10 +20,13 @@ config CGPISTOL_SLOT
 
 config CGPISTOL_AUTOFIRE
     bool "Fire on a timer as well as on the button"
-    default y
+    default n
     help
-        A bench run needs a steady stream of shots. Turn this off to fire
-        only with the PRG button.
+        Off by default since the module can start a run over the radio
+        (D-014). A stub that fires on its own timer would add shots to a
+        radio started run and spoil the count, so the timer is now the
+        fallback rather than the normal way to drive a bench. The PRG
+        button still fires a single shot whatever this is set to.
 
 config CGPISTOL_RATE_MS
     int "Milliseconds between shots when firing on the timer"

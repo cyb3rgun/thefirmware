@@ -307,3 +307,50 @@ truth and `sdkconfig.defaults` is only a wish, so a value that matters is
 worth grepping for in the generated file once. And the generated files take
 precedence on later builds, so a corrected default needs the stale
 `sdkconfig.<target>` deleted before it takes.
+
+## D-014 A bench run is started and read over the radio, not over two cables
+
+Decided in S01-B01, at the founder's direction, after the first attempt at
+the measurements failed on something simple: to put the pistol at 5 m you
+unplug it, and the moment you unplug it you lose the serial port that was
+going to tell you what it measured.
+
+So the pistol no longer needs a cable. A run is started over the radio and
+its result comes back the same way, and everything is read on the module's
+USB port:
+
+1. The core sends `bench_start` with a shot count and a rate.
+2. The module broadcasts a `start` packet carrying a run id, the count, the
+   rate and its own mac, three times, because there is no acknowledgement
+   for it and a lost one stalls the bench.
+3. The pistol fires exactly that many shots, keeping the round trip
+   statistics it already kept, then unicasts one `report` back to the
+   module, also three times.
+4. The module prints the report as a line on the port and forwards it as a
+   `bench_report` frame.
+
+The run id is echoed from `start` into `report`. Repeats of either are
+dropped by it, and a report that arrives late, from the run before, is
+recognised as late rather than written into the current row.
+
+Two protocols grow by two messages each, and both additions are bench only:
+
+| Protocol | Type | Name | Direction |
+| --- | --- | --- | --- |
+| cgproto | 5 | `start` | module to pistols, broadcast |
+| cgproto | 6 | `report` | pistol to module, unicast |
+| cgusb | 0x7E | `bench_start` | core to module |
+| cgusb | 0xFE | `bench_report` | module to core |
+
+The two USB types sit well outside the space version 1 uses, 0x01 to 0x07
+and 0x81 to 0x85. A conformant implementation of `usb-protocol.md` never
+sends or expects them, so theclient B04 is unaffected by their existence,
+and the module answers anything it does not know with `error unknown_type`
+either way. As with D-008, `usb-protocol.md` and `concept.md` are not edited
+here: the architect is asked whether these belong in the documents as a
+bench annexe or should stay a firmware side arrangement.
+
+`CONFIG_CGPISTOL_AUTOFIRE` now defaults to off. A stub firing on its own
+timer would add shots to a radio started run and spoil the count. The timer
+is the fallback, the radio is the normal way to drive a bench, and the PRG
+button still fires a single shot whatever either is set to.

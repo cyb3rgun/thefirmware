@@ -22,6 +22,12 @@ enum {
     CGPROTO_ACK = 2,
     CGPROTO_TIME_MARK = 3,
     CGPROTO_HELLO = 4,
+
+    /* Bench only, added in S01-B01, D-014. They carry no game traffic and
+     * exist so a measurement run needs nothing but the module's USB port:
+     * the pistol can sit on a power bank at 5 m with no cable to the PC. */
+    CGPROTO_START = 5,  /* module to pistols, broadcast: run this many shots */
+    CGPROTO_REPORT = 6, /* pistol to module, unicast: what the run measured */
 };
 
 /* shot, flags byte. Mirrors CGUSB_SHOT_FLAG_UNAIMED so the module forwards
@@ -70,6 +76,36 @@ typedef struct __attribute__((packed)) {
     uint8_t fw[3];
     uint16_t crc;
 } cgproto_hello_t;
+
+/* Bench only. The module broadcasts this to start a measurement run; the
+ * pistol answers with one report when the run is done. run_id is echoed
+ * back, so a report that arrives late, from the run before, is recognised
+ * as late instead of being written into the current row. */
+typedef struct __attribute__((packed)) {
+    uint8_t type; /* CGPROTO_START */
+    uint8_t module_mac[6];
+    uint16_t run_id;
+    uint16_t shots;
+    uint16_t rate_ms;
+    uint16_t crc;
+} cgproto_start_t;
+
+typedef struct __attribute__((packed)) {
+    uint8_t type; /* CGPROTO_REPORT */
+    uint8_t pistol_mac[6];
+    uint16_t run_id;
+    uint32_t sent;
+    uint32_t acked;
+    uint32_t resends;
+    uint32_t lost;
+    uint32_t median_us;
+    uint32_t p95_us;
+    uint32_t mean_us;
+    uint32_t min_us;
+    uint32_t max_us;
+    int8_t rssi; /* the module's acknowledgement as the pistol heard it */
+    uint16_t crc;
+} cgproto_report_t;
 
 /* Fills in the crc field of a packet that is otherwise complete. The packet
  * must be one of the structs above, and len its sizeof. */

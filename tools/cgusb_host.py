@@ -162,6 +162,20 @@ MESSAGES: tuple[Message, ...] = (
     Message(0x84, "pistol_seen", "<6sb", ("pistol_id", "rssi")),
     # error is the one variable message: code plus 0 to 32 detail bytes.
     Message(0x85, "error", "", ("code", "detail")),
+    # Bench only, D-014, outside the type space version 1 uses. They let a
+    # measurement run be started and read through the module's port alone,
+    # with the pistol on a power bank and no cable to the PC.
+    Message(0x7E, "bench_start", "<HH", ("shots", "rate_ms")),
+    Message(
+        0xFE,
+        "bench_report",
+        "<6sHIIIIIIIIIbb",
+        (
+            "pistol_id", "run_id", "sent", "acked", "resends", "lost",
+            "median_us", "p95_us", "mean_us", "min_us", "max_us",
+            "rssi_at_pistol", "rssi_at_module",
+        ),
+    ),
 )
 
 BY_TYPE = {m.type: m for m in MESSAGES}
@@ -320,6 +334,18 @@ def describe(type_: int, fields: dict) -> str:
         code = ERROR_NAMES.get(fields["code"], str(fields["code"]))
         detail = fields["detail"].hex(" ") if fields["detail"] else ""
         return f"error {code} {detail}".rstrip()
+    if name == "bench_report":
+        return (
+            f"bench_report run={fields['run_id']} "
+            f"pistol={mac_str(fields['pistol_id'])} "
+            f"sent={fields['sent']} acked={fields['acked']} "
+            f"resends={fields['resends']} lost={fields['lost']} "
+            f"median={fields['median_us']}us p95={fields['p95_us']}us "
+            f"mean={fields['mean_us']}us min={fields['min_us']}us "
+            f"max={fields['max_us']}us "
+            f"rssi pistol={fields['rssi_at_pistol']} "
+            f"module={fields['rssi_at_module']}"
+        )
     return f"{name} {fields}"
 
 
@@ -356,6 +382,16 @@ def build_vectors() -> list[dict]:
             ),
         ),
         ("pistol_seen", dict(pistol_id=pistol, rssi=-60)),
+        ("bench_start", dict(shots=100, rate_ms=200)),
+        (
+            "bench_report",
+            dict(
+                pistol_id=pistol, run_id=7, sent=100, acked=100, resends=3,
+                lost=0, median_us=2710, p95_us=5572, mean_us=3103,
+                min_us=2360, max_us=6570, rssi_at_pistol=-42,
+                rssi_at_module=-44,
+            ),
+        ),
         ("error", dict(code=2, detail=b"")),
         ("error", dict(code=6, detail=bytes(range(32)))),
     ]

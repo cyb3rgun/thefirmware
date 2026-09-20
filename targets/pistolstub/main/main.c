@@ -89,6 +89,16 @@ static SemaphoreHandle_t s_ack_sem;
 static volatile uint16_t s_waiting_seq;
 static volatile bool s_ack_seen;
 
+/* A run started over the radio by the module, D-014. The callback only
+ * records what arrived; the shooter task does the work. */
+static volatile bool s_start_pending;
+static volatile uint16_t s_start_run_id;
+static volatile uint16_t s_start_shots;
+static volatile uint16_t s_start_rate_ms;
+static volatile bool s_have_run_id;
+static uint16_t s_last_run_id;
+static uint8_t s_start_module[6];
+
 /* ------------------------------------------------------------ statistics -- */
 
 static void stats_reset(void)
@@ -186,6 +196,22 @@ static void radio_recv_cb(const esp_now_recv_info_t *info, const uint8_t *data, 
     if (!cgproto_check(data, (size_t)len)) {
         return;
     }
+    if (data[0] == CGPROTO_START) {
+        const cgproto_start_t *start = (const cgproto_start_t *)data;
+        /* The module sends start three times. Take the first and let the
+         * repeats pass. */
+        if (!s_have_run_id || start->run_id != s_last_run_id) {
+            s_last_run_id = start->run_id;
+            s_have_run_id = true;
+            s_start_run_id = start->run_id;
+            s_start_shots = start->shots;
+            s_start_rate_ms = start->rate_ms;
+            memcpy(s_start_module, start->module_mac, 6);
+            s_start_pending = true;
+        }
+        return;
+    }
+
     if (data[0] != CGPROTO_ACK) {
         return;
     }
@@ -274,6 +300,52 @@ static bool fire(void)
     return false;
 }
 
+/* Bench only, D-014. The run's numbers go back over the radio, so the
+ * pistol needs no cable to the PC and can sit on a power bank at 5 m. */
+static void send_report(uint16_t run_id, const uint8_t module_mac[6])
+{
+    uint32_t median = 0;
+    uint32_t p95 = 0;
+    stats_percentiles(&median, &p95);
+
+    cgproto_report_t report = {
+        .type = CGPROTO_REPORT,
+        .run_id = run_id,
+        .sent = g.sent,
+        .acked = g.acked,
+        .resends = g.resends,
+        .lost = g.lost,
+        .median_us = median,
+        .p95_us = p95,
+        .mean_us = (g.rtt_total > 0) ? (uint32_t)(g.rtt_sum / g.rtt_total) : 0,
+        .min_us = g.rtt_min,
+        .max_us = g.rtt_max,
+        .rssi = g.last_rssi,
+    };
+    memcpy(report.pistol_mac, g.mac, 6);
+    cgproto_seal(&report, sizeof(report));
+
+    esp_now_peer_info_t peer = {
+        .channel = CONFIG_CGPISTOL_CHANNEL,
+        .ifidx = WIFI_IF_STA,
+        .encrypt = false,
+    };
+    memcpy(peer.peer_addr, module_mac, 6);
+    const esp_err_t added = esp_now_add_peer(&peer);
+    if (added != ESP_OK && added != ESP_ERR_ESPNOW_EXIST) {
+        ESP_LOGW(TAG, "cannot add the module as a peer: %s", esp_err_to_name(added));
+        return;
+    }
+
+    /* There is no acknowledgement for a report either, so it goes three
+     * times. The module keeps the first and drops the repeats by run id. */
+    for (int i = 0; i < 3; i++) {
+        esp_now_send(module_mac, (const uint8_t *)&report, sizeof(report));
+        vTaskDelay(pdMS_TO_TICKS(30));
+    }
+    ESP_LOGI(TAG, "report for run %u sent to the module", (unsigned)run_id);
+}
+
 static void say_hello(void)
 {
     cgproto_hello_t hello = {
@@ -297,8 +369,31 @@ static void shooter_task(void *arg)
     vTaskDelay(pdMS_TO_TICKS(1500));
 
     for (;;) {
+        if (s_start_pending) {
+            s_start_pending = false;
+
+            const uint16_t run_id = s_start_run_id;
+            const uint16_t shots = s_start_shots;
+            const uint16_t rate_ms = (s_start_rate_ms > 0) ? s_start_rate_ms : 200u;
+            uint8_t module_mac[6];
+            memcpy(module_mac, s_start_module, 6);
+
+            ESP_LOGI(TAG, "run %u from the module: %u shots every %u ms", (unsigned)run_id,
+                     (unsigned)shots, (unsigned)rate_ms);
+            stats_reset();
+
+            for (uint16_t i = 0; i < shots; i++) {
+                fire();
+                vTaskDelay(pdMS_TO_TICKS(rate_ms));
+            }
+
+            stats_print();
+            send_report(run_id, module_mac);
+            continue;
+        }
+
         if (!CONFIG_CGPISTOL_AUTOFIRE) {
-            vTaskDelay(pdMS_TO_TICKS(200));
+            vTaskDelay(pdMS_TO_TICKS(50));
             continue;
         }
 
