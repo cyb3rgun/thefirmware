@@ -139,3 +139,24 @@ already present on the machine. The test framework is the same Unity that
 The same tests are additionally checked against `tools/cgusb_host.py`, so the
 firmware encoder and the Python reference encoder are proven to agree byte
 for byte rather than merely being written from the same document.
+
+## D-008 A zero delimiter at each end of a frame
+
+Decided in S01-B01, found by a test rather than by reading.
+`usb-protocol.md` section 1 says frames are "COBS encoded and terminated with
+a zero byte". Termination alone is not enough on a port that also carries the
+ESP-IDF log (D-006). Log text contains no zero byte, so it does not terminate
+anything: it sits in the receiver's buffer and the next frame's bytes are
+appended to it. The delimiter that ends the frame then closes one block made
+of log text and frame, which fails the CRC. The log line does not merely look
+untidy, it eats the frame behind it.
+
+thefirmware therefore writes a zero byte before the frame as well as after
+it. A receiver that already follows the document sees an empty block between
+the two delimiters and skips it, because an empty block carries no type and
+no CRC and was never a frame. The change costs one byte per frame and is
+invisible to a correct implementation of version 1.
+
+The document is not changed here, since `usb-protocol.md` says neither side
+changes it alone. The architect is asked to fold the leading delimiter into
+section 1 so theclient B04 is written against it rather than discovering it.
