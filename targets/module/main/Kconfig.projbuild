@@ -1,0 +1,38 @@
+menu "CYB3RGUN module"
+
+config CGMODULE_CHANNEL
+    int "Fixed 2.4 GHz channel"
+    range 1 13
+    default 1
+    help
+        The room's channel, concept.md principle 4. The core overrides it
+        with the channel message and the value is kept in NVS, so this is
+        only the value a freshly erased board starts on. It must match the
+        channel of the pistols.
+
+config CGMODULE_SLOT
+    int "This target's slot in the room plan"
+    range 0 32
+    default 1
+    help
+        Slots are counted from 1. The core overrides this with the beacons
+        message. A pistol that identified no beacons sends slot 0, which
+        every module acknowledges and forwards as unaimed.
+
+config CGBEACON_SLOTS
+    int "Targets sharing one multiplex period"
+    range 1 32
+    default 4
+    help
+        usb-protocol.md gives the module a slot and a period but no slot
+        count, so the count is set here. The multiplex window is the period
+        divided by this number. See D-009.
+
+config CGMODULE_STATUS_PERIOD_S
+    int "Seconds between status messages"
+    range 1 3600
+    default 30
+    help
+        usb-protocol.md section 3: status on request and every 30 s.
+
+endmenu

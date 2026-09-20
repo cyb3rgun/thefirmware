@@ -160,3 +160,53 @@ invisible to a correct implementation of version 1.
 The document is not changed here, since `usb-protocol.md` says neither side
 changes it alone. The architect is asked to fold the leading delimiter into
 section 1 so theclient B04 is written against it rather than discovering it.
+
+## D-009 The multiplex slot count is a build time value, open question
+
+Decided in S01-B01, provisional. `usb-protocol.md` section 2 gives the
+beacons message a `slot` and a `period_ms`, and `concept.md` section 4 says
+the clusters multiplex "with a period and a slot from the core". Neither
+says how many slots one period holds, and without that number the module
+cannot work out how wide its own window is.
+
+thefirmware divides the period by `CONFIG_CGBEACON_SLOTS`, a menuconfig
+value that defaults to 4, and lights its clusters during window `slot - 1`.
+Slots are counted from 1, because a shot carrying slot 0 already means "no
+beacons identified" in `concept.md` section 3. A module that is in multiplex
+mode and still holds slot 0 stays dark rather than colliding with slot 1.
+
+Two readings would remove the build time value, and the architect is asked
+to pick one: either the room plan's slot count joins the beacons message, or
+`period_ms` is redefined as the width of one slot rather than of the whole
+period. Until then a room with more than four targets needs a rebuild, which
+is fine on the bench and not fine in a venue.
+
+## D-010 status counts shots heard on the radio and shots the core acknowledged
+
+Decided in S01-B01. `usb-protocol.md` section 3 gives status a `shots heard`
+and a `shots acked` counter without saying who did the acknowledging, and
+section 4 says a shot the core never acknowledges is dropped "and counts it
+in status" without naming a field for it.
+
+thefirmware reads the pair as the two ends of the module's job: `shots
+heard` counts distinct shots that arrived over ESP-NOW, and `shots acked`
+counts the ones the core acknowledged over USB. The difference is then the
+shots that are still in flight or were dropped, which is the only reading
+that lets section 4 count a drop in status at all.
+
+A pistol resends until it is acknowledged, so the same shot arrives more
+than once. Every copy is acknowledged on the radio, and only the first is
+counted and forwarded. Without that, `shots heard` would count radio traffic
+rather than shots, and the acceptance test of S01-B01, forwarded frames
+equal heard shots, could never hold.
+
+## D-011 The status temperature field is sent as zero on the Heltec bench
+
+Decided in S01-B01. status carries a `temp i8`. The ESP32-D0WDQ6 on the
+Heltec V2 has no temperature sensor that ESP-IDF exposes; the one on later
+chips is absent on this silicon. The field is sent as 0 rather than as an
+invented number, and it starts carrying a real reading on the ESP32-S3 and
+ESP32-P4 boards of later seasons, which do have the sensor.
+
+If the core needs to tell "no sensor" from "zero degrees" before then, the
+architect is asked for a sentinel value; -128 is free.
