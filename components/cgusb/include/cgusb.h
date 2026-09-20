@@ -5,8 +5,8 @@
  * (D-007). The transport that puts the bytes on a UART is cgusb_link.h.
  *
  * Wire format, usb-protocol.md section 1: one byte type, payload, two bytes
- * CRC-16/CCITT over type and payload, little endian. The whole thing is COBS
- * encoded and terminated with a zero byte.
+ * CRC-16/CCITT-FALSE over type and payload, little endian. The whole thing
+ * is COBS encoded and delimited by a zero byte at both ends.
  */
 #pragma once
 
@@ -53,14 +53,14 @@ enum {
     CGUSB_MSG_PISTOL_SEEN = 0x84,
     CGUSB_MSG_ERROR = 0x85,
 
-    /* Bench only, added in S01-B01, D-014. They sit well outside the type
-     * space version 1 uses, 0x01 to 0x07 and 0x81 to 0x85, so a conformant
-     * implementation of the document never sends or expects them and is not
-     * affected by their existence. They let a measurement run be started and
-     * read entirely through the module's port, with the pistol on a power
-     * bank and no cable to the PC. */
-    CGUSB_MSG_BENCH_START = 0x7E,  /* core to module */
-    CGUSB_MSG_BENCH_REPORT = 0xFE, /* module to core */
+    /* The bench annexe of usb-protocol.md section 6. Types 0xF0 to 0xFF are
+     * reserved in both directions for bench and test messages that never
+     * appear in production, and theclient ignores them. They let a
+     * measurement run be started and read entirely through the module's
+     * port, with the pistol on a power bank and no cable to the PC.
+     * D-014, agreed with the architect on 20 September 2026. */
+    CGUSB_MSG_BENCH_START = 0xF0,  /* core to module */
+    CGUSB_MSG_BENCH_RESULT = 0xF1, /* module to core */
 };
 
 /* beacons, mode byte */
@@ -71,6 +71,11 @@ enum {
 
 /* shot, flags byte */
 #define CGUSB_SHOT_FLAG_UNAIMED (1u << 0)
+
+/* status, temp byte. The ESP32-D0WDQ6 on the Heltec bench has no sensor
+ * ESP-IDF exposes, and the architect allocated this sentinel on
+ * 20 September 2026, which closes D-011. */
+#define CGUSB_TEMP_NO_SENSOR (-128)
 
 /* hello_ack, chip byte */
 enum {
@@ -116,6 +121,10 @@ typedef struct __attribute__((packed)) {
     uint8_t mode;       /* CGUSB_BEACON_MODE_ */
     uint16_t period_ms; /* the full multiplex period, not the slot width */
     uint8_t slot;       /* this target's slot in the room plan */
+    /* How many slots share one period, so the module's own window is
+     * period_ms divided by slots. Added by the architect on 20 September
+     * 2026, which closes D-009 and retires the build time value. */
+    uint8_t slots;
 } cgusb_beacons_t;
 
 typedef struct __attribute__((packed)) {
@@ -151,15 +160,20 @@ typedef struct __attribute__((packed)) {
     int8_t rssi;
 } cgusb_shot_t;
 
+/* Four counters since 20 September 2026, which closes D-010. heard minus
+ * forwarded are shots for another module's slot; forwarded minus acked by
+ * the core are shots the core dropped. */
 typedef struct __attribute__((packed)) {
     uint32_t uptime_s;
     uint8_t channel;
     uint8_t beacons_mask;
     uint8_t mode;
-    int8_t temp;
+    int8_t temp; /* CGUSB_TEMP_NO_SENSOR when the chip has none */
     uint32_t free_heap;
     uint32_t shots_heard;
-    uint32_t shots_acked;
+    uint32_t shots_acked_to_pistol;
+    uint32_t shots_forwarded;
+    uint32_t shots_acked_by_core;
 } cgusb_status_t;
 
 typedef struct __attribute__((packed)) {
@@ -174,27 +188,24 @@ typedef struct __attribute__((packed)) {
     uint8_t detail[CGUSB_ERROR_DETAIL_MAX];
 } cgusb_error_t;
 
-/* Bench only, D-014. */
+/* The bench annexe, usb-protocol.md section 6. The core owns the run id, so
+ * a result can always be matched to the run that asked for it. */
 typedef struct __attribute__((packed)) {
+    uint32_t run_id;
     uint16_t shots;
-    uint16_t rate_ms;
+    uint16_t interval_ms;
 } cgusb_bench_start_t;
 
 typedef struct __attribute__((packed)) {
-    uint8_t pistol_id[6];
-    uint16_t run_id;
-    uint32_t sent;
-    uint32_t acked;
-    uint32_t resends;
-    uint32_t lost;
+    uint32_t run_id;
+    uint16_t sent;
+    uint16_t acked;
+    uint16_t resends;
+    uint16_t lost;
     uint32_t median_us;
     uint32_t p95_us;
-    uint32_t mean_us;
-    uint32_t min_us;
-    uint32_t max_us;
-    int8_t rssi_at_pistol; /* the module's ack as the pistol heard it */
-    int8_t rssi_at_module; /* the pistol's shots as the module heard them */
-} cgusb_bench_report_t;
+    int8_t rssi;
+} cgusb_bench_result_t;
 
 /* ----------------------------------------------------------- primitives -- */
 

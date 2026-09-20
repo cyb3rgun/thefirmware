@@ -12,16 +12,16 @@
     typedef char cgusb_size_check_##type[(sizeof(type) == (expected)) ? 1 : -1]
 
 CGUSB_ASSERT_SIZE(cgusb_hello_t, 1);
-CGUSB_ASSERT_SIZE(cgusb_beacons_t, 5);
+CGUSB_ASSERT_SIZE(cgusb_beacons_t, 6);
 CGUSB_ASSERT_SIZE(cgusb_time_mark_t, 8);
 CGUSB_ASSERT_SIZE(cgusb_ack_t, 2);
 CGUSB_ASSERT_SIZE(cgusb_channel_t, 1);
 CGUSB_ASSERT_SIZE(cgusb_hello_ack_t, 11);
 CGUSB_ASSERT_SIZE(cgusb_shot_t, 30);
-CGUSB_ASSERT_SIZE(cgusb_status_t, 20);
+CGUSB_ASSERT_SIZE(cgusb_status_t, 28);
 CGUSB_ASSERT_SIZE(cgusb_pistol_seen_t, 7);
-CGUSB_ASSERT_SIZE(cgusb_bench_start_t, 4);
-CGUSB_ASSERT_SIZE(cgusb_bench_report_t, 46);
+CGUSB_ASSERT_SIZE(cgusb_bench_start_t, 8);
+CGUSB_ASSERT_SIZE(cgusb_bench_result_t, 21);
 
 /* ----------------------------------------------------------------- crc -- */
 
@@ -145,8 +145,8 @@ int cgusb_payload_len(uint8_t type)
         return (int)sizeof(cgusb_pistol_seen_t);
     case CGUSB_MSG_BENCH_START:
         return (int)sizeof(cgusb_bench_start_t);
-    case CGUSB_MSG_BENCH_REPORT:
-        return (int)sizeof(cgusb_bench_report_t);
+    case CGUSB_MSG_BENCH_RESULT:
+        return (int)sizeof(cgusb_bench_result_t);
     case CGUSB_MSG_ERROR:
         return -1; /* one code byte plus 0 to 32 detail bytes */
     default:
@@ -369,8 +369,8 @@ const char *cgusb_type_name(uint8_t type)
         return "error";
     case CGUSB_MSG_BENCH_START:
         return "bench_start";
-    case CGUSB_MSG_BENCH_REPORT:
-        return "bench_report";
+    case CGUSB_MSG_BENCH_RESULT:
+        return "bench_result";
     default:
         return "unknown";
     }

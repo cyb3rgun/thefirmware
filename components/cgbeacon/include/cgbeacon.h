@@ -29,9 +29,9 @@ extern "C" {
 
 #define CGBEACON_CLUSTERS 4
 
-/* How many targets share one multiplex period. usb-protocol.md gives the
- * module a slot and a period but no slot count, so it is a build time value
- * here and an open question in D-009. */
+/* How many targets share one multiplex period. The beacons message carries
+ * this since 20 September 2026 (D-009), so the build time value is only
+ * what the module uses before the first beacons message arrives. */
 #ifndef CGBEACON_DEFAULT_SLOTS
 #define CGBEACON_DEFAULT_SLOTS 4
 #endif
@@ -52,10 +52,14 @@ typedef struct {
 
 esp_err_t cgbeacon_init(const cgbeacon_config_t *cfg);
 
-/* The beacons message of usb-protocol.md section 2. */
-esp_err_t cgbeacon_set(uint8_t mask, uint8_t mode, uint16_t period_ms, uint8_t slot);
+/* The beacons message of usb-protocol.md section 2. slots is how many slots
+ * share one period, so this module's window is period_ms divided by slots.
+ * A slots of 0 keeps whatever count is already in force. */
+esp_err_t cgbeacon_set(uint8_t mask, uint8_t mode, uint16_t period_ms, uint8_t slot,
+                       uint8_t slots);
 
-void cgbeacon_get(uint8_t *mask, uint8_t *mode, uint16_t *period_ms, uint8_t *slot);
+void cgbeacon_get(uint8_t *mask, uint8_t *mode, uint16_t *period_ms, uint8_t *slot,
+                  uint8_t *slots);
 
 /* Anchors the multiplex phase to the shared clock of time_mark. */
 void cgbeacon_set_clock(uint64_t unix_ms);

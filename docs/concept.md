@@ -31,35 +31,15 @@ Only the module whose slot (or mac) matches acknowledges and forwards; every oth
 `time_mark`: type u8 (3), unix ms u64, from the module, broadcast.
 `hello`: type u8 (4), pistol mac 6, fw version 3 bytes; sent when the trigger is held on power up, for pairing by shooting.
 
+Bench packets, never in production: `start` (type 0xF0, run id u32, shots u16, interval_ms u16, acknowledged by the stub, resent by the module until acknowledged) and `report` (type 0xF1, the stub's run summary). Amended 20 September 2026 (D-014).
+
 ## 4. Beacons
 
-Four clusters of three TSHG6400, 850 nm, 100 mA each, one MOSFET per cluster on GPIO 12, 13, 14 and 25 of the Heltec V2 (OLED on 4, 15, 16 and LoRa on 5, 18, 19, 26, 27 stay untouched). Modes: all steady; multiplex with a period and a slot from the core, so several targets in a room can be told apart by the pistol.
+Four clusters of three TSHG6400, 850 nm, 100 mA each, one MOSFET per cluster on GPIO 12, 13, 14 and 25 of the Heltec V2 (OLED on 4, 15, 16 and LoRa on 5, 18, 19, 26, 27 stay untouched). GPIO 12 is the MTDI strapping pin: the cluster board on that channel carries a 10 kOhm pulldown from gate to ground, so the ESP32 never samples a floating gate at reset (amended 20 September 2026). The pistol stub acknowledgement timeout is 8 ms, from the measured 2.6 ms median. Modes: all steady; multiplex with a period and a slot from the core, so several targets in a room can be told apart by the pistol.
 
 ## 5. Camera
 
 PAJ7025R2 over SPI (VSPI on the Heltec bench: 5, 18, 19, 23 with LoRa disabled; own host on the S3 in series), 1 to 2 MHz on flying wires, up to 14 MHz on the board, 0.1 uF and 10 uF at the module pins, up to 16 objects at up to 200 frames per second, 4095 x 4095 interpolated. The bench reads objects; the aim computation (homography from four points, then zeroing offset from NVS) comes when the beacons exist.
-
-Bench wiring, clarified 20 September 2026. The VSPI default pins are not
-usable on the Heltec V2 bench: LoRa holds 5, 18, 19 and 27 on that board and
-the bench leaves it wired. The camera therefore sits on free pins, routed
-through the ESP32 GPIO matrix, which costs nothing worth measuring at 1 MHz.
-The pin numbers on the right are the PAJ7025R2 module's own, from table 1 of
-its datasheet.
-
-| ESP32 | Direction | Module pin | Signal |
-| --- | --- | --- | --- |
-| GPIO 21 | out | 10 | G9/CSB, chip select, active low |
-| GPIO 22 | out | 11 | G10/SCK |
-| GPIO 17 | in | 12 | G11/MISO |
-| GPIO 23 | out | 13 | G12/MOSI |
-| 3V3 | power | 17 | VDDMA |
-| GND | power | 14 and 20 | VSSD and VSSD_LED, both required |
-
-None of the four clash with the OLED, which keeps 4, 15 and 16. VDDMA takes
-2.0 to 3.6 V and the part dies above 3.96 V, so the 5 V supply that feeds the
-beacon clusters must not reach this module or any of its pins; at 3.3 V no
-level shifter is needed in either direction. The 0.1 uF and 10 uF sit at the
-module pins as the paragraph above already says.
 
 ## 6. Seasons
 

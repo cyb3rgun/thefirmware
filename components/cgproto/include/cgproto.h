@@ -23,11 +23,17 @@ enum {
     CGPROTO_TIME_MARK = 3,
     CGPROTO_HELLO = 4,
 
-    /* Bench only, added in S01-B01, D-014. They carry no game traffic and
-     * exist so a measurement run needs nothing but the module's USB port:
-     * the pistol can sit on a power bank at 5 m with no cable to the PC. */
-    CGPROTO_START = 5,  /* module to pistols, broadcast: run this many shots */
-    CGPROTO_REPORT = 6, /* pistol to module, unicast: what the run measured */
+    /* Bench packets, never in production, concept.md section 3 as amended
+     * on 20 September 2026 (D-014). They carry no game traffic and exist so
+     * a measurement run needs nothing but the module's USB port: the pistol
+     * can sit on a power bank at 5 m with no cable to the PC. */
+    CGPROTO_START = 0xF0,     /* module to pistols, broadcast */
+    CGPROTO_REPORT = 0xF1,    /* pistol to module, unicast: the run summary */
+    /* concept.md says start is "acknowledged by the stub, resent by the
+     * module until acknowledged" without naming the acknowledgement. This
+     * is thefirmware's reading of it, in the bench range and on the radio
+     * only, so theclient never sees it. Raised with the architect. */
+    CGPROTO_START_ACK = 0xF2, /* pistol to module, unicast */
 };
 
 /* shot, flags byte. Mirrors CGUSB_SHOT_FLAG_UNAIMED so the module forwards
@@ -77,27 +83,42 @@ typedef struct __attribute__((packed)) {
     uint16_t crc;
 } cgproto_hello_t;
 
-/* Bench only. The module broadcasts this to start a measurement run; the
- * pistol answers with one report when the run is done. run_id is echoed
- * back, so a report that arrives late, from the run before, is recognised
- * as late instead of being written into the current row. */
+/* Bench only. The module broadcasts start to begin a measurement run and
+ * keeps broadcasting it until a pistol acknowledges. The run id comes from
+ * the core and is echoed through every packet of the run, so a late report
+ * from the run before is recognised as late rather than written into the
+ * current row.
+ *
+ * The module's mac is not carried: ESP-NOW hands the receiver the source
+ * address, which is the same thing and one field less to get wrong. */
 typedef struct __attribute__((packed)) {
     uint8_t type; /* CGPROTO_START */
-    uint8_t module_mac[6];
-    uint16_t run_id;
+    uint32_t run_id;
     uint16_t shots;
-    uint16_t rate_ms;
+    uint16_t interval_ms;
     uint16_t crc;
 } cgproto_start_t;
 
 typedef struct __attribute__((packed)) {
+    uint8_t type; /* CGPROTO_START_ACK */
+    uint8_t pistol_mac[6];
+    uint32_t run_id;
+    uint16_t crc;
+} cgproto_start_ack_t;
+
+/* The counters are 16 bit because a bench run is a few hundred shots, and
+ * the microsecond percentiles are 32 bit because a bad one is milliseconds.
+ * This mirrors bench_result of usb-protocol.md section 6 so the module can
+ * forward it field for field. mean, min and max are extra, for the log on
+ * the module rather than for the core. */
+typedef struct __attribute__((packed)) {
     uint8_t type; /* CGPROTO_REPORT */
     uint8_t pistol_mac[6];
-    uint16_t run_id;
-    uint32_t sent;
-    uint32_t acked;
-    uint32_t resends;
-    uint32_t lost;
+    uint32_t run_id;
+    uint16_t sent;
+    uint16_t acked;
+    uint16_t resends;
+    uint16_t lost;
     uint32_t median_us;
     uint32_t p95_us;
     uint32_t mean_us;

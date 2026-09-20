@@ -84,6 +84,8 @@ offset are gone. A warning is given before every erase, never after.
 
 ## D-005 CRC-16/CCITT parameters, open question for the architect
 
+**Agreed with the architect.** Agreed with the architect, 20 September 2026. `usb-protocol.md` section 1 now names CRC-16/CCITT-FALSE and states all five parameters and the check value, so the variant below is the protocol rather than thefirmware's reading of it. Nothing in the code changed.
+
 Decided in S01-B01, provisional. `usb-protocol.md` section 1 names
 "CRC-16/CCITT" without pinning the parameters, and the name is used for at
 least three different algorithms in the field. thefirmware implements the
@@ -110,6 +112,8 @@ before either side ships. Open until the architect rules.
 
 ## D-006 The console shares UART0 with the protocol link
 
+**Agreed with the architect.** Agreed with the architect, 20 September 2026. The console keeps sharing UART0 with the protocol link, and `usb-protocol.md` section 1 now says the leading delimiter exists so that stray console text cannot damage a frame.
+
 Decided in S01-B01. The Heltec V2 has one USB to UART bridge, on UART0.
 `usb-protocol.md` section 1 puts the protocol on that bridge, and ESP-IDF
 puts its log there as well. Both share it, at 921600 baud.
@@ -126,6 +130,8 @@ answer is to lower the log level, not to change the framing.
 
 ## D-007 Host unit tests run under Unity through CMake, not the linux target
 
+**Agreed with the architect.** Agreed with the architect, 20 September 2026. Unchanged: the host tests stay under Unity through CMake while the build machine is Windows.
+
 Decided in S01-B01. The briefing asks for unit tests with the IDF test
 framework on the host build. ESP-IDF's own host build is the `linux` target,
 which Espressif does not support on Windows, and this machine is Windows.
@@ -141,6 +147,8 @@ firmware encoder and the Python reference encoder are proven to agree byte
 for byte rather than merely being written from the same document.
 
 ## D-008 A zero delimiter at each end of a frame
+
+**Agreed with the architect.** Agreed with the architect, 20 September 2026. The leading delimiter is now in `usb-protocol.md` section 1, so theclient B04 is written against it rather than discovering it. Nothing in the code changed.
 
 Decided in S01-B01, found by a test rather than by reading.
 `usb-protocol.md` section 1 says frames are "COBS encoded and terminated with
@@ -163,6 +171,8 @@ section 1 so theclient B04 is written against it rather than discovering it.
 
 ## D-009 The multiplex slot count is a build time value, open question
 
+**Agreed with the architect.** Agreed with the architect, 20 September 2026, and settled the first way: the beacons message now carries a `slots` byte, so the module is told how many slots share a period instead of being built with the number. `CONFIG_CGBEACON_SLOTS` survives only as what the module uses before the first beacons message arrives.
+
 Decided in S01-B01, provisional. `usb-protocol.md` section 2 gives the
 beacons message a `slot` and a `period_ms`, and `concept.md` section 4 says
 the clusters multiplex "with a period and a slot from the core". Neither
@@ -183,6 +193,8 @@ is fine on the bench and not fine in a venue.
 
 ## D-010 status counts shots heard on the radio and shots the core acknowledged
 
+**Agreed with the architect.** Agreed with the architect, 20 September 2026, and settled more fully than asked: status now carries four counters rather than two, so the two subtractions are both explicit. Heard minus forwarded are shots for another module's slot; forwarded minus acked by the core are shots the core dropped. The reading below was right and is now unambiguous.
+
 Decided in S01-B01. `usb-protocol.md` section 3 gives status a `shots heard`
 and a `shots acked` counter without saying who did the acknowledging, and
 section 4 says a shot the core never acknowledges is dropped "and counts it
@@ -202,6 +214,8 @@ equal heard shots, could never hold.
 
 ## D-011 The status temperature field is sent as zero on the Heltec bench
 
+**Agreed with the architect.** Agreed with the architect, 20 September 2026. -128 is the sentinel, as suggested, and `usb-protocol.md` section 3 says so. The module sends it instead of 0.
+
 Decided in S01-B01. status carries a `temp i8`. The ESP32-D0WDQ6 on the
 Heltec V2 has no temperature sensor that ESP-IDF exposes; the one on later
 chips is absent on this silicon. The field is sent as 0 rather than as an
@@ -212,6 +226,8 @@ If the core needs to tell "no sensor" from "zero degrees" before then, the
 architect is asked for a sentinel value; -128 is free.
 
 ## D-012 The PAJ7025R2 register map is missing, so the bench probes for it
+
+**Agreed with the architect.** Partly closed by D-015 and partly still open: the datasheet text of pages 21 to 57 is still wanted, and the camera board is still not wired.
 
 Decided in S01-B01. This one is a question, not a decision, and it is the
 one thing in this pass that hardware alone cannot settle.
@@ -274,6 +290,8 @@ datasheet text itself, which the reference does not replace.
 
 ## D-013 A value in sdkconfig.defaults is ignored when the symbol has no prompt
 
+**Agreed with the architect.** Not a question for the architect, a trap recorded so it costs nobody else an hour.
+
 Decided in S01-B01, found on the bench rather than by reading. Worth an
 entry because it fails silently and costs an hour.
 
@@ -316,6 +334,8 @@ precedence on later builds, so a corrected default needs the stale
 `sdkconfig.<target>` deleted before it takes.
 
 ## D-014 A bench run is started and read over the radio, not over two cables
+
+**Agreed with the architect.** Agreed with the architect, 20 September 2026, and given a proper home: `usb-protocol.md` section 6 is now a bench annexe reserving types 0xF0 to 0xFF in both directions, and `concept.md` section 3 carries the radio counterparts. The types moved from 0x7E and 0xFE to 0xF0 and 0xF1, the core now owns the run id, and start is acknowledged by the stub and resent by the module until it is. See the note at the end of this entry on the one thing the amendment left open.
 
 Decided in S01-B01, at the founder's direction, after the first attempt at
 the measurements failed on something simple: to put the pistol at 5 m you
@@ -418,3 +438,36 @@ part of it is wrong. Until that run happens the camera rows of
 Still wanted, and still worth having: pages 21 to 57 of the datasheet. The
 reference gives the values but not the reasoning, and a bench that has to
 change the frame rate, the gain or the exposure will want the text.
+
+
+## D-016 What the architect's amendments changed in the firmware
+
+Recorded 20 September 2026, after `usb-protocol.md` and `concept.md` came
+back amended. Every open question of the S01-B01 handover is now ruled on,
+and this entry is the list of what moved in the code so the next reader does
+not have to diff two documents to find out.
+
+| Change | Where |
+| --- | --- |
+| beacons grew a `slots` byte, 5 payload bytes to 6 | `cgusb_beacons_t`, and `cgbeacon_set` takes it at runtime |
+| status grew from two counters to four, 20 payload bytes to 28 | `cgusb_status_t`, and the module counts all four |
+| temp is now -128 rather than 0 when there is no sensor | `CGUSB_TEMP_NO_SENSOR` |
+| bench types moved from 0x7E and 0xFE to 0xF0 and 0xF1 | the bench annexe, `usb-protocol.md` section 6 |
+| the core owns the run id, and it is 32 bit | `cgusb_bench_start_t`, and the module's random seed is gone |
+| bench_result is the module to core name, and carries seven fields rather than thirteen | `cgusb_bench_result_t` |
+| the radio bench packets moved to 0xF0 and 0xF1 | `cgproto` |
+| start is resent until acknowledged | `bench_task` on the module, `send_start_ack` on the pistol |
+| the acknowledgement timeout is 8 ms | `CONFIG_CGPISTOL_ACK_TIMEOUT_MS` |
+
+One thing the amendment leaves open, and thefirmware has made a choice that
+is easy to change. `concept.md` section 3 says start is "acknowledged by the
+stub, resent by the module until acknowledged" without saying what the
+acknowledgement looks like. thefirmware sends a `start_ack` at type 0xF2,
+inside the bench range and on the radio only, carrying the pistol's mac and
+the run id. theclient never sees it. If the architect would rather the
+acknowledgement were the first shot of the run, or a different type, it is
+one struct and two call sites.
+
+The module's mac was dropped from the start packet. ESP-NOW hands the
+receiver the source address, which is the same six bytes, and a field that
+can disagree with the packet it arrived in is a field worth not having.

@@ -84,6 +84,10 @@ static struct {
     uint32_t rtt_max;
 } g;
 
+/* Set by the callback, sent by the shooter task: a start has to be
+ * acknowledged, and esp_now_send must not be called from the callback. */
+static volatile bool s_ack_start_pending;
+
 /* Handshake between the shooter task and the radio callback. */
 static SemaphoreHandle_t s_ack_sem;
 static volatile uint16_t s_waiting_seq;
@@ -92,11 +96,11 @@ static volatile bool s_ack_seen;
 /* A run started over the radio by the module, D-014. The callback only
  * records what arrived; the shooter task does the work. */
 static volatile bool s_start_pending;
-static volatile uint16_t s_start_run_id;
+static volatile uint32_t s_start_run_id;
 static volatile uint16_t s_start_shots;
-static volatile uint16_t s_start_rate_ms;
+static volatile uint16_t s_start_interval_ms;
 static volatile bool s_have_run_id;
-static uint16_t s_last_run_id;
+static uint32_t s_last_run_id;
 static uint8_t s_start_module[6];
 
 /* ------------------------------------------------------------ statistics -- */
@@ -198,17 +202,20 @@ static void radio_recv_cb(const esp_now_recv_info_t *info, const uint8_t *data, 
     }
     if (data[0] == CGPROTO_START) {
         const cgproto_start_t *start = (const cgproto_start_t *)data;
-        /* The module sends start three times. Take the first and let the
-         * repeats pass. */
+
+        /* The module keeps sending start until it is acknowledged, so every
+         * copy is acknowledged and only the first begins a run. The module's
+         * address comes from the packet rather than from a field in it. */
         if (!s_have_run_id || start->run_id != s_last_run_id) {
             s_last_run_id = start->run_id;
             s_have_run_id = true;
             s_start_run_id = start->run_id;
             s_start_shots = start->shots;
-            s_start_rate_ms = start->rate_ms;
-            memcpy(s_start_module, start->module_mac, 6);
+            s_start_interval_ms = start->interval_ms;
+            memcpy(s_start_module, info->src_addr, 6);
             s_start_pending = true;
         }
+        s_ack_start_pending = true;
         return;
     }
 
@@ -300,9 +307,39 @@ static bool fire(void)
     return false;
 }
 
+static esp_err_t peer_ensure(const uint8_t mac[6])
+{
+    esp_now_peer_info_t peer = {
+        .channel = CONFIG_CGPISTOL_CHANNEL,
+        .ifidx = WIFI_IF_STA,
+        .encrypt = false,
+    };
+    memcpy(peer.peer_addr, mac, 6);
+
+    const esp_err_t err = esp_now_add_peer(&peer);
+    return (err == ESP_ERR_ESPNOW_EXIST) ? ESP_OK : err;
+}
+
+/* concept.md section 3: start is acknowledged by the stub and resent by the
+ * module until it is. */
+static void send_start_ack(uint32_t run_id, const uint8_t module_mac[6])
+{
+    if (peer_ensure(module_mac) != ESP_OK) {
+        return;
+    }
+
+    cgproto_start_ack_t ack = {
+        .type = CGPROTO_START_ACK,
+        .run_id = run_id,
+    };
+    memcpy(ack.pistol_mac, g.mac, 6);
+    cgproto_seal(&ack, sizeof(ack));
+    esp_now_send(module_mac, (const uint8_t *)&ack, sizeof(ack));
+}
+
 /* Bench only, D-014. The run's numbers go back over the radio, so the
  * pistol needs no cable to the PC and can sit on a power bank at 5 m. */
-static void send_report(uint16_t run_id, const uint8_t module_mac[6])
+static void send_report(uint32_t run_id, const uint8_t module_mac[6])
 {
     uint32_t median = 0;
     uint32_t p95 = 0;
@@ -311,10 +348,10 @@ static void send_report(uint16_t run_id, const uint8_t module_mac[6])
     cgproto_report_t report = {
         .type = CGPROTO_REPORT,
         .run_id = run_id,
-        .sent = g.sent,
-        .acked = g.acked,
-        .resends = g.resends,
-        .lost = g.lost,
+        .sent = (uint16_t)g.sent,
+        .acked = (uint16_t)g.acked,
+        .resends = (uint16_t)g.resends,
+        .lost = (uint16_t)g.lost,
         .median_us = median,
         .p95_us = p95,
         .mean_us = (g.rtt_total > 0) ? (uint32_t)(g.rtt_sum / g.rtt_total) : 0,
@@ -325,15 +362,8 @@ static void send_report(uint16_t run_id, const uint8_t module_mac[6])
     memcpy(report.pistol_mac, g.mac, 6);
     cgproto_seal(&report, sizeof(report));
 
-    esp_now_peer_info_t peer = {
-        .channel = CONFIG_CGPISTOL_CHANNEL,
-        .ifidx = WIFI_IF_STA,
-        .encrypt = false,
-    };
-    memcpy(peer.peer_addr, module_mac, 6);
-    const esp_err_t added = esp_now_add_peer(&peer);
-    if (added != ESP_OK && added != ESP_ERR_ESPNOW_EXIST) {
-        ESP_LOGW(TAG, "cannot add the module as a peer: %s", esp_err_to_name(added));
+    if (peer_ensure(module_mac) != ESP_OK) {
+        ESP_LOGW(TAG, "cannot add the module as a peer");
         return;
     }
 
@@ -343,7 +373,7 @@ static void send_report(uint16_t run_id, const uint8_t module_mac[6])
         esp_now_send(module_mac, (const uint8_t *)&report, sizeof(report));
         vTaskDelay(pdMS_TO_TICKS(30));
     }
-    ESP_LOGI(TAG, "report for run %u sent to the module", (unsigned)run_id);
+    ESP_LOGI(TAG, "report for run %" PRIu32 " sent to the module", run_id);
 }
 
 static void say_hello(void)
@@ -369,22 +399,28 @@ static void shooter_task(void *arg)
     vTaskDelay(pdMS_TO_TICKS(1500));
 
     for (;;) {
+        if (s_ack_start_pending) {
+            s_ack_start_pending = false;
+            send_start_ack(s_start_run_id, s_start_module);
+        }
+
         if (s_start_pending) {
             s_start_pending = false;
 
-            const uint16_t run_id = s_start_run_id;
+            const uint32_t run_id = s_start_run_id;
             const uint16_t shots = s_start_shots;
-            const uint16_t rate_ms = (s_start_rate_ms > 0) ? s_start_rate_ms : 200u;
+            const uint16_t interval_ms =
+                (s_start_interval_ms > 0) ? s_start_interval_ms : 200u;
             uint8_t module_mac[6];
             memcpy(module_mac, s_start_module, 6);
 
-            ESP_LOGI(TAG, "run %u from the module: %u shots every %u ms", (unsigned)run_id,
-                     (unsigned)shots, (unsigned)rate_ms);
+            ESP_LOGI(TAG, "run %" PRIu32 " from the module: %u shots every %u ms", run_id,
+                     (unsigned)shots, (unsigned)interval_ms);
             stats_reset();
 
             for (uint16_t i = 0; i < shots; i++) {
                 fire();
-                vTaskDelay(pdMS_TO_TICKS(rate_ms));
+                vTaskDelay(pdMS_TO_TICKS(interval_ms));
             }
 
             stats_print();

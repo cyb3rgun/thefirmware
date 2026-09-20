@@ -5,22 +5,27 @@ Everything goes through the module's port. The pistol needs no cable to the
 PC and can sit on a power bank wherever the distance says (D-014):
 
   1. The script is the core. It says hello, sets the beacons, and sends
-     bench_start with the shot count and the rate.
-  2. The module broadcasts a start packet. The pistol runs exactly that many
-     shots, keeping its own round trip statistics.
-  3. The pistol sends one report back over the radio. The module prints it
-     as a line and forwards it as a bench_report frame.
-  4. Meanwhile this script acknowledges every forwarded shot, so the
+     bench_start with a run id, a shot count and an interval.
+  2. The module broadcasts a start packet and keeps broadcasting it until a
+     pistol acknowledges.
+  3. The pistol runs exactly that many shots, keeping its own round trip
+     statistics, then sends one report back over the radio.
+  4. The module prints it as a line and forwards it as a bench_result frame.
+  5. Meanwhile this script acknowledges every forwarded shot, so the
      forwarding path is exercised and counted at the same time.
+
+The run id is the core's, so a result can always be matched to the run that
+asked for it, and a late report from an earlier run is recognised as late.
 
 Usage:
     python tools/bench_s01.py --module COM7 --distance "1 m"
-    python tools/bench_s01.py --module COM7 --distance "5 m" --shots 100 --rate 200
+    python tools/bench_s01.py --module COM7 --distance "5 m" --shots 100
 """
 from __future__ import annotations
 
 import argparse
 import pathlib
+import random
 import sys
 import time
 
@@ -69,12 +74,13 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--module", required=True, help="port of the target module")
     ap.add_argument("--distance", required=True, help="label for the row, e.g. 3 m")
     ap.add_argument("--shots", type=int, default=100)
-    ap.add_argument("--rate", type=int, default=200, help="ms between shots")
+    ap.add_argument("--interval", type=int, default=200, help="ms between shots")
     ap.add_argument("--baud", type=int, default=921600)
     ap.add_argument("--beacons", type=lambda s: int(s, 0), default=0x0F)
     ap.add_argument("--mode", type=int, default=0, choices=(0, 1))
     ap.add_argument("--period", type=int, default=40)
     ap.add_argument("--slot", type=int, default=1)
+    ap.add_argument("--slots", type=int, default=4)
     ap.add_argument("--verbose", action="store_true", help="show the module's log")
     args = ap.parse_args(argv)
 
@@ -83,8 +89,9 @@ def main(argv: list[str]) -> int:
     module.setRTS(False)
     decoder = proto.Decoder()
 
+    run_id = random.getrandbits(32)
     print(f"=== S01 bench, {args.distance} ===")
-    print(f"module {args.module}, {args.shots} shots every {args.rate} ms")
+    print(f"module {args.module}, {args.shots} shots every {args.interval} ms, run {run_id}")
 
     print("resetting the module and opening the session")
     reset_board(module)
@@ -97,24 +104,29 @@ def main(argv: list[str]) -> int:
     print(f"module fw {'.'.join(str(b) for b in info['fw'])} mac {proto.mac_str(info['mac'])}")
 
     module.write(
-        proto.encode("beacons", mask=args.beacons, mode=args.mode,
-                     period_ms=args.period, slot=args.slot)
+        proto.encode("beacons", mask=args.beacons, mode=args.mode, period_ms=args.period,
+                     slot=args.slot, slots=args.slots)
     )
-    print(f"beacons mask 0x{args.beacons:02X} mode {args.mode} slot {args.slot}")
+    print(f"beacons mask 0x{args.beacons:02X} mode {args.mode} "
+          f"slot {args.slot} of {args.slots}")
 
-    # The run is started over the radio, so the pistol can be anywhere.
-    module.write(proto.encode("bench_start", shots=args.shots, rate_ms=args.rate))
-    print("start sent over the radio, waiting for the pistol to finish")
+    # The run is started over the radio, so the pistol can be anywhere. The
+    # module keeps asking until the pistol acknowledges.
+    module.write(
+        proto.encode("bench_start", run_id=run_id, shots=args.shots,
+                     interval_ms=args.interval)
+    )
+    print("start sent, waiting for the pistol to acknowledge and run")
 
-    # Generous: the pistol resends a lost shot up to three times at 20 ms,
-    # so a bad run is slower than a good one, and the report itself takes a
-    # further 100 ms or so.
-    budget = args.shots * (args.rate + 4 * 25) / 1000.0 + 20.0
+    # Generous: a lost shot costs up to four transmissions at the pistol's
+    # acknowledgement timeout, and the module spends up to two seconds
+    # looking for a pistol before it gives up.
+    budget = args.shots * (args.interval + 4 * 12) / 1000.0 + 25.0
 
     frames = 0
     bad = 0
     pistol_seqs = set()
-    report = None
+    result = None
     status = None
     deadline = time.monotonic() + budget
     started = time.monotonic()
@@ -127,8 +139,11 @@ def main(argv: list[str]) -> int:
                     frames += 1
                     pistol_seqs.add(fields["pistol_seq"])
                     module.write(proto.encode("ack", seq=fields["seq"]))
-                elif type_ == proto.BY_NAME["bench_report"].type:
-                    report = fields
+                elif type_ == proto.BY_NAME["bench_result"].type:
+                    if fields["run_id"] == run_id:
+                        result = fields
+                    else:
+                        print(f"  a result for run {fields['run_id']} arrived, not ours")
                 elif type_ == proto.BY_NAME["status"].type:
                     status = fields
                 elif type_ == proto.BY_NAME["error"].type:
@@ -137,13 +152,13 @@ def main(argv: list[str]) -> int:
                 print(f"  . {item[1]}")
             elif item[0] == "bad":
                 bad += 1
-        if report is not None:
+        if result is not None:
             break
 
     elapsed = time.monotonic() - started
 
-    if report is None:
-        print(f"\nno report from the pistol inside {budget:.0f} s")
+    if result is None:
+        print(f"\nno result for run {run_id} inside {budget:.0f} s")
         print(f"the module forwarded {frames} shot frame(s) in that time")
         print("is the pistol powered, on channel 1, and within range?")
         return 1
@@ -156,26 +171,28 @@ def main(argv: list[str]) -> int:
             if item[0] == "frame" and item[1] == proto.BY_NAME["status"].type:
                 status = item[2]
 
-    sent = report["sent"]
-    lost = report["lost"]
+    sent = result["sent"]
+    lost = result["lost"]
     loss_pct = (lost * 100.0 / sent) if sent else 0.0
     distinct = len(pistol_seqs)
 
-    print(f"\nrun took {elapsed:.1f} s, report for run {report['run_id']}")
+    print(f"\nrun took {elapsed:.1f} s")
 
     print("\n--- section 1, shot to acknowledgement round trip ---")
-    print(f"| {args.distance} | {sent} | {report['median_us']} | {report['p95_us']} | "
-          f"{loss_pct:.2f} percent | {report['resends']} | "
-          f"{report['rssi_at_pistol']} / {report['rssi_at_module']} |")
-    print(f"  mean {report['mean_us']} us, min {report['min_us']} us, "
-          f"max {report['max_us']} us, acked {report['acked']}, lost {lost}")
+    print(f"| {args.distance} | {sent} | {result['median_us']} | {result['p95_us']} | "
+          f"{loss_pct:.2f} percent | {result['resends']} | {result['rssi']} |")
+    print(f"  acked {result['acked']}, lost {lost}")
 
     print("\n--- section 2, forwarded frames against heard shots ---")
-    heard = status.get("shots_heard", "?") if status else "?"
-    core_acked = status.get("shots_acked", "?") if status else "?"
-    unforwarded = "?" if heard == "?" else max(0, int(heard) - frames)
-    print(f"| {args.distance} | {sent} | {heard} | {frames} | {core_acked} | {unforwarded} |")
-    print(f"  distinct pistol sequence numbers in the forwarded frames: {distinct}")
+    if status:
+        heard = status["shots_heard"]
+        print(f"| {args.distance} | {sent} | {heard} | "
+              f"{status['shots_forwarded']} | {status['shots_acked_by_core']} | "
+              f"{max(0, heard - status['shots_forwarded'])} |")
+        print(f"  acknowledged to the pistol: {status['shots_acked_to_pistol']}")
+    else:
+        print("  the module did not answer status_req")
+    print(f"  frames this host counted: {frames}, distinct pistol sequences: {distinct}")
     print(f"  frames the host could not decode: {bad}")
 
     ok = (frames == distinct == sent) and lost == 0

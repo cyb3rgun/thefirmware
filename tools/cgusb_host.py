@@ -11,9 +11,9 @@ Two jobs:
    `hello`, decodes what comes back and acknowledges shots, so a bench runs
    before theclient B04 exists.
 
-The CRC variant is D-005 and is still open with the architect. Change
-DEFAULT_CRC below and the matching constant in components/cgusb/cgusb.c and
-both sides move together.
+The CRC parameters and the delimiter at both ends were pinned by the
+architect on 20 September 2026 and are now stated in usb-protocol.md
+section 1, which closes D-005 and D-008.
 
 Usage:
     python tools/cgusb_host.py selftest
@@ -133,7 +133,8 @@ class Message:
 MESSAGES: tuple[Message, ...] = (
     # core to module
     Message(0x01, "hello", "<B", ("proto",)),
-    Message(0x02, "beacons", "<BBHB", ("mask", "mode", "period_ms", "slot")),
+    Message(0x02, "beacons", "<BBHBB",
+            ("mask", "mode", "period_ms", "slot", "slots")),
     Message(0x03, "time_mark", "<Q", ("unix_ms",)),
     Message(0x04, "ack", "<H", ("seq",)),
     Message(0x05, "channel", "<B", ("channel",)),
@@ -153,27 +154,27 @@ MESSAGES: tuple[Message, ...] = (
     Message(
         0x83,
         "status",
-        "<IBBBbIII",
+        "<IBBBbIIIII",
         (
             "uptime_s", "channel", "beacons_mask", "mode", "temp",
-            "free_heap", "shots_heard", "shots_acked",
+            "free_heap", "shots_heard", "shots_acked_to_pistol",
+            "shots_forwarded", "shots_acked_by_core",
         ),
     ),
     Message(0x84, "pistol_seen", "<6sb", ("pistol_id", "rssi")),
     # error is the one variable message: code plus 0 to 32 detail bytes.
     Message(0x85, "error", "", ("code", "detail")),
-    # Bench only, D-014, outside the type space version 1 uses. They let a
-    # measurement run be started and read through the module's port alone,
-    # with the pistol on a power bank and no cable to the PC.
-    Message(0x7E, "bench_start", "<HH", ("shots", "rate_ms")),
+    # The bench annexe of usb-protocol.md section 6. Types 0xF0 to 0xFF are
+    # reserved in both directions for bench and test messages that never
+    # appear in production; theclient ignores them. D-014.
+    Message(0xF0, "bench_start", "<IHH", ("run_id", "shots", "interval_ms")),
     Message(
-        0xFE,
-        "bench_report",
-        "<6sHIIIIIIIIIbb",
+        0xF1,
+        "bench_result",
+        "<IHHHHIIb",
         (
-            "pistol_id", "run_id", "sent", "acked", "resends", "lost",
-            "median_us", "p95_us", "mean_us", "min_us", "max_us",
-            "rssi_at_pistol", "rssi_at_module",
+            "run_id", "sent", "acked", "resends", "lost",
+            "median_us", "p95_us", "rssi",
         ),
     ),
 )
@@ -185,6 +186,9 @@ ERROR_DETAIL_MAX = 32
 BEACON_MODE_STEADY = 0
 BEACON_MODE_MULTIPLEX = 1
 SHOT_FLAG_UNAIMED = 1 << 0
+
+# status, temp byte: the chip has no sensor ESP-IDF exposes (D-011).
+TEMP_NO_SENSOR = -128
 
 CHIP_NAMES = {1: "esp32", 2: "esp32s3", 3: "esp32p4"}
 ERROR_NAMES = {
@@ -322,11 +326,15 @@ def describe(type_: int, fields: dict) -> str:
             f"rssi={fields['rssi']}"
         )
     if name == "status":
+        temp = "no sensor" if fields["temp"] == TEMP_NO_SENSOR else f"{fields['temp']}C"
         return (
             f"status up={fields['uptime_s']}s ch={fields['channel']} "
             f"beacons=0x{fields['beacons_mask']:02X} mode={fields['mode']} "
-            f"temp={fields['temp']}C heap={fields['free_heap']} "
-            f"heard={fields['shots_heard']} acked={fields['shots_acked']}"
+            f"temp={temp} heap={fields['free_heap']} "
+            f"heard={fields['shots_heard']} "
+            f"acked_pistol={fields['shots_acked_to_pistol']} "
+            f"forwarded={fields['shots_forwarded']} "
+            f"acked_core={fields['shots_acked_by_core']}"
         )
     if name == "pistol_seen":
         return f"pistol_seen {mac_str(fields['pistol_id'])} rssi={fields['rssi']}"
@@ -334,17 +342,13 @@ def describe(type_: int, fields: dict) -> str:
         code = ERROR_NAMES.get(fields["code"], str(fields["code"]))
         detail = fields["detail"].hex(" ") if fields["detail"] else ""
         return f"error {code} {detail}".rstrip()
-    if name == "bench_report":
+    if name == "bench_result":
         return (
-            f"bench_report run={fields['run_id']} "
-            f"pistol={mac_str(fields['pistol_id'])} "
+            f"bench_result run={fields['run_id']} "
             f"sent={fields['sent']} acked={fields['acked']} "
             f"resends={fields['resends']} lost={fields['lost']} "
             f"median={fields['median_us']}us p95={fields['p95_us']}us "
-            f"mean={fields['mean_us']}us min={fields['min_us']}us "
-            f"max={fields['max_us']}us "
-            f"rssi pistol={fields['rssi_at_pistol']} "
-            f"module={fields['rssi_at_module']}"
+            f"rssi={fields['rssi']}"
         )
     return f"{name} {fields}"
 
@@ -359,7 +363,7 @@ def build_vectors() -> list[dict]:
     pistol = bytes([0x24, 0x6F, 0x28, 0x01, 0x02, 0x03])
     cases = [
         ("hello", dict(proto=1)),
-        ("beacons", dict(mask=0x0F, mode=1, period_ms=40, slot=3)),
+        ("beacons", dict(mask=0x0F, mode=1, period_ms=40, slot=3, slots=4)),
         ("time_mark", dict(unix_ms=1758326400123)),
         ("ack", dict(seq=0x1234)),
         ("channel", dict(channel=6)),
@@ -377,19 +381,19 @@ def build_vectors() -> list[dict]:
         (
             "status",
             dict(
-                uptime_s=123456, channel=6, beacons_mask=0x0F, mode=1, temp=-7,
-                free_heap=200000, shots_heard=1000, shots_acked=999,
+                uptime_s=123456, channel=6, beacons_mask=0x0F, mode=1,
+                temp=TEMP_NO_SENSOR, free_heap=200000, shots_heard=1000,
+                shots_acked_to_pistol=1000, shots_forwarded=998,
+                shots_acked_by_core=997,
             ),
         ),
         ("pistol_seen", dict(pistol_id=pistol, rssi=-60)),
-        ("bench_start", dict(shots=100, rate_ms=200)),
+        ("bench_start", dict(run_id=0x0BADF00D, shots=100, interval_ms=200)),
         (
-            "bench_report",
+            "bench_result",
             dict(
-                pistol_id=pistol, run_id=7, sent=100, acked=100, resends=3,
-                lost=0, median_us=2710, p95_us=5572, mean_us=3103,
-                min_us=2360, max_us=6570, rssi_at_pistol=-42,
-                rssi_at_module=-44,
+                run_id=0x0BADF00D, sent=100, acked=100, resends=12, lost=0,
+                median_us=2619, p95_us=22407, rssi=-89,
             ),
         ),
         ("error", dict(code=2, detail=b"")),
@@ -507,7 +511,7 @@ def monitor(args) -> int:
         if args.beacons is not None:
             port.write(
                 encode("beacons", mask=args.beacons, mode=args.mode,
-                       period_ms=args.period, slot=args.slot)
+                       period_ms=args.period, slot=args.slot, slots=args.slots)
             )
             print(f"beacons mask=0x{args.beacons:02X} mode={args.mode} "
                   f"period={args.period}ms slot={args.slot}")
@@ -568,6 +572,8 @@ def main(argv: list[str]) -> int:
     p_mon.add_argument("--mode", type=int, default=BEACON_MODE_STEADY, choices=(0, 1))
     p_mon.add_argument("--period", type=int, default=40, help="multiplex period in ms")
     p_mon.add_argument("--slot", type=int, default=1)
+    p_mon.add_argument("--slots", type=int, default=4,
+                       help="how many slots share one multiplex period")
     p_mon.add_argument("--channel", type=int, default=None)
     p_mon.add_argument("--poll", type=float, default=0.0,
                        help="seconds between status_req, 0 to never ask")

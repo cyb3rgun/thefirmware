@@ -83,11 +83,15 @@ static struct {
     uint16_t next_seq;
     bool core_hello;
 
-    uint32_t shots_heard;   /* distinct shots heard on the radio */
-    uint32_t shots_acked;   /* shots the core acknowledged, D-010 */
+    /* The four counters of usb-protocol.md section 3, D-010. heard minus
+     * forwarded are shots for another module's slot; forwarded minus acked
+     * by the core are shots the core dropped. */
+    uint32_t shots_heard;
+    uint32_t shots_acked_to_pistol;
+    uint32_t shots_forwarded;
+    uint32_t shots_acked_by_core;
     uint32_t shots_dropped; /* the core never acknowledged, after the resends */
     uint32_t core_resends;
-    uint32_t radio_acks;
     uint32_t duplicates;
     uint32_t pistols_seen;
 
@@ -96,9 +100,11 @@ static struct {
     int64_t last_time_mark_us;
 
     /* bench only, D-014 */
-    uint16_t bench_run_id;
-    uint32_t bench_heard_at_start;
-    uint32_t bench_acked_at_start;
+    uint32_t bench_run_id;
+    bool bench_running;
+    bool bench_acked;   /* a pistol answered the start */
+    uint16_t bench_shots;
+    uint16_t bench_interval_ms;
 } g;
 
 static pending_t s_pending[PENDING_MAX];
@@ -253,6 +259,7 @@ static void forward_queue(const cgusb_shot_t *shot)
     entry->seq = shot->seq;
     entry->frame = *shot;
     entry->retries = 0;
+    g.shots_forwarded++;
     forward_send(entry);
 
     xSemaphoreGive(s_pending_lock);
@@ -264,7 +271,7 @@ static void forward_ack(uint16_t seq)
     for (int i = 0; i < PENDING_MAX; i++) {
         if (s_pending[i].used && s_pending[i].seq == seq) {
             s_pending[i].used = false;
-            g.shots_acked++;
+            g.shots_acked_by_core++;
             break;
         }
     }
@@ -363,7 +370,7 @@ static void radio_ack(const uint8_t pistol_mac[6], uint16_t pistol_seq)
     cgproto_seal(&ack, sizeof(ack));
 
     if (esp_now_send(pistol_mac, (const uint8_t *)&ack, sizeof(ack)) == ESP_OK) {
-        g.radio_acks++;
+        g.shots_acked_to_pistol++;
     }
 }
 
@@ -421,34 +428,71 @@ static void handle_shot(const radio_rx_t *rx)
 
 /* Bench only, D-014. The pistol sits on a power bank with no cable to the
  * PC, so the run is started over the radio and its result comes back the
- * same way, and everything is read on the module's port. */
-static void bench_start(uint16_t shots, uint16_t rate_ms)
+ * same way, and everything is read on the module's USB port.
+ *
+ * concept.md section 3: start is "acknowledged by the stub, resent by the
+ * module until acknowledged". The resending lives in bench_task. */
+static void bench_send_start(void)
 {
-    g.bench_run_id++;
-
     cgproto_start_t start = {
         .type = CGPROTO_START,
         .run_id = g.bench_run_id,
-        .shots = shots,
-        .rate_ms = rate_ms,
+        .shots = g.bench_shots,
+        .interval_ms = g.bench_interval_ms,
     };
-    memcpy(start.module_mac, g.mac, 6);
     cgproto_seal(&start, sizeof(start));
+    esp_now_send(BROADCAST, (const uint8_t *)&start, sizeof(start));
+}
 
-    /* There is no acknowledgement for start, and a lost one stalls the
-     * bench, so it goes out three times. The pistol takes the first copy
-     * and ignores the rest by run id. */
-    for (int i = 0; i < 3; i++) {
-        esp_now_send(BROADCAST, (const uint8_t *)&start, sizeof(start));
-        vTaskDelay(pdMS_TO_TICKS(20));
+static void bench_start(uint32_t run_id, uint16_t shots, uint16_t interval_ms)
+{
+    g.bench_run_id = run_id;
+    g.bench_shots = shots;
+    g.bench_interval_ms = (interval_ms > 0) ? interval_ms : 200u;
+    g.bench_acked = false;
+    g.bench_running = true;
+
+    bench_send_start();
+    ESP_LOGI(TAG, "bench run %" PRIu32 ", %u shots every %u ms", g.bench_run_id,
+             (unsigned)g.bench_shots, (unsigned)g.bench_interval_ms);
+}
+
+/* Resends start until a pistol acknowledges it. */
+static void bench_task(void *arg)
+{
+    (void)arg;
+    int tries = 0;
+
+    for (;;) {
+        vTaskDelay(pdMS_TO_TICKS(100));
+
+        if (!g.bench_running || g.bench_acked) {
+            tries = 0;
+            continue;
+        }
+        if (++tries > 20) {
+            /* Two seconds of asking is long enough to call it. */
+            g.bench_running = false;
+            ESP_LOGW(TAG, "no pistol acknowledged run %" PRIu32, g.bench_run_id);
+            const uint8_t detail[1] = {0};
+            cgusb_link_send_error(CGUSB_ERR_RADIO, detail, sizeof(detail));
+            continue;
+        }
+        bench_send_start();
     }
+}
 
-    /* The counters below are what the run will be compared against. */
-    g.bench_heard_at_start = g.shots_heard;
-    g.bench_acked_at_start = g.shots_acked;
+static void handle_start_ack(const radio_rx_t *rx)
+{
+    const cgproto_start_ack_t *ack = (const cgproto_start_ack_t *)rx->data;
 
-    ESP_LOGI(TAG, "bench run %u started, %u shots every %u ms", (unsigned)g.bench_run_id,
-             (unsigned)shots, (unsigned)rate_ms);
+    if (ack->run_id != g.bench_run_id || g.bench_acked) {
+        return;
+    }
+    g.bench_acked = true;
+    ESP_LOGI(TAG, "run %" PRIu32 " acknowledged by %02X:%02X:%02X:%02X:%02X:%02X",
+             g.bench_run_id, ack->pistol_mac[0], ack->pistol_mac[1], ack->pistol_mac[2],
+             ack->pistol_mac[3], ack->pistol_mac[4], ack->pistol_mac[5]);
 }
 
 static void handle_report(const radio_rx_t *rx)
@@ -456,29 +500,28 @@ static void handle_report(const radio_rx_t *rx)
     const cgproto_report_t *r = (const cgproto_report_t *)rx->data;
 
     if (r->run_id != g.bench_run_id) {
-        ESP_LOGW(TAG, "report for run %u arrived late, this is run %u",
-                 (unsigned)r->run_id, (unsigned)g.bench_run_id);
+        ESP_LOGW(TAG, "report for run %" PRIu32 " arrived late, this is run %" PRIu32,
+                 r->run_id, g.bench_run_id);
         return;
     }
+    g.bench_running = false;
 
-    /* The status line asked for on COM7. It is plain text, so it sits
-     * between frames and the host tool passes it through (D-006). */
+    /* The status line on the port. Plain text, so it sits between frames
+     * and the host tool passes it through (D-006). */
     ESP_LOGI(TAG,
-             "REPORT run=%u pistol=%02X:%02X:%02X:%02X:%02X:%02X sent=%" PRIu32
-             " acked=%" PRIu32 " resends=%" PRIu32 " lost=%" PRIu32 " median_us=%" PRIu32
-             " p95_us=%" PRIu32 " mean_us=%" PRIu32 " min_us=%" PRIu32 " max_us=%" PRIu32
-             " rssi_pistol=%d rssi_module=%d heard=%" PRIu32 " forwarded=%" PRIu32,
-             (unsigned)r->run_id, r->pistol_mac[0], r->pistol_mac[1], r->pistol_mac[2],
-             r->pistol_mac[3], r->pistol_mac[4], r->pistol_mac[5], r->sent, r->acked,
-             r->resends, r->lost, r->median_us, r->p95_us, r->mean_us, r->min_us, r->max_us,
-             r->rssi, rx->rssi, g.shots_heard - g.bench_heard_at_start,
-             g.shots_acked - g.bench_acked_at_start);
+             "REPORT run=%" PRIu32 " pistol=%02X:%02X:%02X:%02X:%02X:%02X sent=%u acked=%u"
+             " resends=%u lost=%u median_us=%" PRIu32 " p95_us=%" PRIu32 " mean_us=%" PRIu32
+             " min_us=%" PRIu32 " max_us=%" PRIu32 " rssi_pistol=%d rssi_module=%d",
+             r->run_id, r->pistol_mac[0], r->pistol_mac[1], r->pistol_mac[2],
+             r->pistol_mac[3], r->pistol_mac[4], r->pistol_mac[5], (unsigned)r->sent,
+             (unsigned)r->acked, (unsigned)r->resends, (unsigned)r->lost, r->median_us,
+             r->p95_us, r->mean_us, r->min_us, r->max_us, r->rssi, rx->rssi);
 
     if (!g.core_hello) {
         return;
     }
 
-    const cgusb_bench_report_t out = {
+    const cgusb_bench_result_t out = {
         .run_id = r->run_id,
         .sent = r->sent,
         .acked = r->acked,
@@ -486,15 +529,9 @@ static void handle_report(const radio_rx_t *rx)
         .lost = r->lost,
         .median_us = r->median_us,
         .p95_us = r->p95_us,
-        .mean_us = r->mean_us,
-        .min_us = r->min_us,
-        .max_us = r->max_us,
-        .rssi_at_pistol = r->rssi,
-        .rssi_at_module = rx->rssi,
+        .rssi = r->rssi,
     };
-    cgusb_bench_report_t frame = out;
-    memcpy(frame.pistol_id, r->pistol_mac, 6);
-    cgusb_link_send(CGUSB_MSG_BENCH_REPORT, &frame, sizeof(frame));
+    cgusb_link_send(CGUSB_MSG_BENCH_RESULT, &out, sizeof(out));
 }
 
 static void handle_hello(const radio_rx_t *rx)
@@ -538,6 +575,9 @@ static void radio_task(void *arg)
         case CGPROTO_HELLO:
             handle_hello(&rx);
             break;
+        case CGPROTO_START_ACK:
+            handle_start_ack(&rx);
+            break;
         case CGPROTO_REPORT:
             handle_report(&rx);
             break;
@@ -559,17 +599,22 @@ static void send_status(void)
     uint8_t mode = 0;
     uint16_t period = 0;
     uint8_t slot = 0;
-    cgbeacon_get(&mask, &mode, &period, &slot);
+    uint8_t slots = 0;
+    cgbeacon_get(&mask, &mode, &period, &slot, &slots);
 
     const cgusb_status_t status = {
         .uptime_s = (uint32_t)(esp_timer_get_time() / 1000000),
         .channel = g.channel,
         .beacons_mask = mask,
         .mode = mode,
-        .temp = 0, /* the ESP32 D0WD has no usable internal sensor, D-011 */
+        /* The ESP32-D0WDQ6 has no sensor ESP-IDF exposes, and the
+         * architect allocated this sentinel for exactly that (D-011). */
+        .temp = CGUSB_TEMP_NO_SENSOR,
         .free_heap = (uint32_t)esp_get_free_heap_size(),
         .shots_heard = g.shots_heard,
-        .shots_acked = g.shots_acked,
+        .shots_acked_to_pistol = g.shots_acked_to_pistol,
+        .shots_forwarded = g.shots_forwarded,
+        .shots_acked_by_core = g.shots_acked_by_core,
     };
     cgusb_link_send(CGUSB_MSG_STATUS, &status, sizeof(status));
 }
@@ -651,7 +696,7 @@ static void on_core_frame(uint8_t type, const uint8_t *payload, size_t len, void
     case CGUSB_MSG_BEACONS: {
         const cgusb_beacons_t *b = (const cgusb_beacons_t *)payload;
         g.slot = b->slot;
-        if (cgbeacon_set(b->mask, b->mode, b->period_ms, b->slot) != ESP_OK) {
+        if (cgbeacon_set(b->mask, b->mode, b->period_ms, b->slot, b->slots) != ESP_OK) {
             const uint8_t detail[2] = {b->mask, b->mode};
             cgusb_link_send_error(CGUSB_ERR_BAD_LENGTH, detail, sizeof(detail));
         }
@@ -677,7 +722,7 @@ static void on_core_frame(uint8_t type, const uint8_t *payload, size_t len, void
         break;
     case CGUSB_MSG_BENCH_START: {
         const cgusb_bench_start_t *b = (const cgusb_bench_start_t *)payload;
-        bench_start(b->shots, b->rate_ms);
+        bench_start(b->run_id, b->shots, b->interval_ms);
         break;
     }
     case CGUSB_MSG_REBOOT:
@@ -716,7 +761,8 @@ static void display_task(void *arg)
         uint8_t mode = 0;
         uint16_t period = 0;
         uint8_t slot = 0;
-        cgbeacon_get(&mask, &mode, &period, &slot);
+        uint8_t slots = 0;
+        cgbeacon_get(&mask, &mode, &period, &slot, &slots);
 
         cgoled_clear();
         cgoled_text(0, 0, "CYB3RGUN MODULE");
@@ -726,8 +772,9 @@ static void display_task(void *arg)
         cgoled_printf(0, 3, "%s MASK %X %ums",
                       (mode == CGUSB_BEACON_MODE_MULTIPLEX) ? "MUX" : "STDY", mask & 0x0F,
                       period);
-        cgoled_printf(0, 4, "HEARD %" PRIu32, g.shots_heard);
-        cgoled_printf(0, 5, "ACKED %" PRIu32, g.shots_acked);
+        cgoled_printf(0, 4, "HEARD %" PRIu32 " FWD %" PRIu32, g.shots_heard,
+                      g.shots_forwarded);
+        cgoled_printf(0, 5, "ACKED %" PRIu32, g.shots_acked_by_core);
         cgoled_printf(0, 6, "DUP %" PRIu32 " RS %" PRIu32 " DR %" PRIu32, g.duplicates,
                       g.core_resends, g.shots_dropped);
         if (g.last_rssi != 0) {
@@ -781,14 +828,6 @@ void app_main(void)
     g.slot = CONFIG_CGMODULE_SLOT;
     g.next_seq = 1;
 
-    /* The run id must not restart at a fixed number when the module is
-     * reset, because the pistol drops a start whose run id it has already
-     * seen and the pistol is not reset between runs. A counter from zero
-     * made every run id 1, so the first bench run after a module reset
-     * worked and every later one was silently discarded at the pistol.
-     * Seeding from the hardware generator makes a repeat a one in 65536
-     * accident instead of a certainty. D-014. */
-    g.bench_run_id = (uint16_t)esp_random();
 
     ESP_ERROR_CHECK(esp_read_mac(g.mac, ESP_MAC_WIFI_STA));
 
@@ -812,6 +851,7 @@ void app_main(void)
     ESP_ERROR_CHECK(cgusb_link_start(&link));
 
     xTaskCreate(radio_task, "cg_radio", 4096, NULL, 12, NULL);
+    xTaskCreate(bench_task, "cg_bench", 3072, NULL, 6, NULL);
     xTaskCreate(forward_task, "cg_forward", 3072, NULL, 8, NULL);
     xTaskCreate(status_task, "cg_status", 3072, NULL, 5, NULL);
     xTaskCreate(display_task, "cg_display", 3072, NULL, 4, NULL);

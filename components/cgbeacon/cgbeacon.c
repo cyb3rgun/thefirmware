@@ -167,7 +167,8 @@ esp_err_t cgbeacon_init(const cgbeacon_config_t *cfg)
     return ESP_OK;
 }
 
-esp_err_t cgbeacon_set(uint8_t mask, uint8_t mode, uint16_t period_ms, uint8_t slot)
+esp_err_t cgbeacon_set(uint8_t mask, uint8_t mode, uint16_t period_ms, uint8_t slot,
+                       uint8_t slots)
 {
     if (!s.ready) {
         return ESP_ERR_INVALID_STATE;
@@ -180,6 +181,9 @@ esp_err_t cgbeacon_set(uint8_t mask, uint8_t mode, uint16_t period_ms, uint8_t s
     s.mode = mode;
     s.period_ms = (period_ms > 0) ? period_ms : 40u;
     s.slot = slot;
+    if (slots > 0) {
+        s.cfg.slots = slots;
+    }
     s.blanked = false;
 
     if (mode == CGUSB_BEACON_MODE_STEADY) {
@@ -198,7 +202,8 @@ esp_err_t cgbeacon_set(uint8_t mask, uint8_t mode, uint16_t period_ms, uint8_t s
     return err;
 }
 
-void cgbeacon_get(uint8_t *mask, uint8_t *mode, uint16_t *period_ms, uint8_t *slot)
+void cgbeacon_get(uint8_t *mask, uint8_t *mode, uint16_t *period_ms, uint8_t *slot,
+                  uint8_t *slots)
 {
     if (mask != NULL) {
         *mask = s.mask;
@@ -211,6 +216,9 @@ void cgbeacon_get(uint8_t *mask, uint8_t *mode, uint16_t *period_ms, uint8_t *sl
     }
     if (slot != NULL) {
         *slot = s.slot;
+    }
+    if (slots != NULL) {
+        *slots = (uint8_t)s.cfg.slots;
     }
 }
 

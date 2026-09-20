@@ -15,8 +15,9 @@ CGPROTO_ASSERT_SIZE(cgproto_shot_t, 36);
 CGPROTO_ASSERT_SIZE(cgproto_ack_t, 12);
 CGPROTO_ASSERT_SIZE(cgproto_time_mark_t, 11);
 CGPROTO_ASSERT_SIZE(cgproto_hello_t, 12);
-CGPROTO_ASSERT_SIZE(cgproto_start_t, 15);
-CGPROTO_ASSERT_SIZE(cgproto_report_t, 48);
+CGPROTO_ASSERT_SIZE(cgproto_start_t, 11);
+CGPROTO_ASSERT_SIZE(cgproto_start_ack_t, 13);
+CGPROTO_ASSERT_SIZE(cgproto_report_t, 42);
 
 size_t cgproto_size(uint8_t type)
 {
@@ -31,6 +32,8 @@ size_t cgproto_size(uint8_t type)
         return sizeof(cgproto_hello_t);
     case CGPROTO_START:
         return sizeof(cgproto_start_t);
+    case CGPROTO_START_ACK:
+        return sizeof(cgproto_start_ack_t);
     case CGPROTO_REPORT:
         return sizeof(cgproto_report_t);
     default:
@@ -80,6 +83,8 @@ const char *cgproto_type_name(uint8_t type)
         return "hello";
     case CGPROTO_START:
         return "start";
+    case CGPROTO_START_ACK:
+        return "start_ack";
     case CGPROTO_REPORT:
         return "report";
     default:
