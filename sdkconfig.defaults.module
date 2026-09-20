@@ -1,0 +1,10 @@
+# Target module: beacon driver, ESP-NOW receiver, USB protocol to the core.
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y
+
+# Concept principle 4: modem sleep off wherever WiFi and ESP-NOW share a chip.
+CONFIG_PM_ENABLE=n
+CONFIG_ESP_WIFI_STA_DISCONNECTED_PM_ENABLE=n
+
+# ESP-NOW needs room for the acknowledgement path and the forwarding buffer.
+CONFIG_ESP_WIFI_STATIC_TX_BUFFER_NUM=16
+CONFIG_ESP_WIFI_DYNAMIC_TX_BUFFER_NUM=32

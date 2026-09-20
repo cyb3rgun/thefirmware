@@ -1,0 +1,13 @@
+# Text files are stored with LF in the repository and checked out as they
+# are, so a Windows build machine and a Linux CI see the same bytes and the
+# dash check reads the same columns everywhere.
+* text=auto eol=lf
+
+*.ps1 text eol=crlf
+*.bat text eol=crlf
+
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.bin binary
+*.elf binary

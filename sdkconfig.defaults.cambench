@@ -1,0 +1,7 @@
+# Target cambench: PAJ7025R2 on VSPI, no radio.
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y
+
+# The camera bench does not use WiFi or ESP-NOW, so the radio stays out of
+# the image and the console keeps the full UART to itself.
+CONFIG_ESP_WIFI_ENABLED=n
+CONFIG_PM_ENABLE=n

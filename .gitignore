@@ -1,0 +1,32 @@
+# ESP-IDF build output
+build/
+build-*/
+
+# Generated sdkconfig, one per target. The sdkconfig.defaults.* files are tracked.
+sdkconfig
+sdkconfig.old
+sdkconfig.module
+sdkconfig.pistolstub
+sdkconfig.cambench
+sdkconfig.*.old
+
+# IDF component manager
+managed_components/
+dependencies.lock
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+
+# Host test output
+test/host/build/
+
+# Editors and OS
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
+Thumbs.db
