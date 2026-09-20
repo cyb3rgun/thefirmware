@@ -16,18 +16,28 @@ Aim computation, the S3 pistol, the IMU and recoil are later seasons.
 
 | Pass | Subject | State |
 | --- | --- | --- |
-| S01-B01 | repository foundation, target module bench, camera bench | in progress |
+| S01-B01 | repository foundation, target module bench, camera bench | done, camera open on D-012 |
 
 ### S01-B01 tasks
 
 | Task | Scope | State |
 | --- | --- | --- |
 | 1 | `chore(repo)` skeleton, decisions, seasons | done |
-| 2 | `feat(cgusb)` COBS, CRC-16, message structs, host reference, tests | open |
-| 3 | `feat(module)` beacons, ESP-NOW receive, acknowledge, forward, OLED | open |
-| 4 | `feat(pistolstub)` shot sender, resend, counters, OLED | open |
-| 5 | `feat(cgcam)` PAJ7025R2 on VSPI, object read, OLED | open |
-| 6 | `docs` measurements, handover, push | open, needs the bench |
+| 2 | `feat(cgusb)` COBS, CRC-16, message structs, host reference, tests | done |
+| 3 | `feat(module)` beacons, ESP-NOW receive, acknowledge, forward, OLED | done, measured |
+| 4 | `feat(pistolstub)` shot sender, resend, counters, OLED | done, measured |
+| 5 | `feat(cgcam)` PAJ7025R2 on VSPI, object read, OLED | blocked, D-012 |
+| 6 | `docs` measurements, handover, push | radio done, camera open |
+
+### What S01-B01 left for the next pass
+
+- The camera, blocked on pages 21 to 57 of the PAJ7025R2 datasheet or the
+  trzy reference (D-012). The board was not wired during the pass either.
+- The open questions of `docs/handovers/S01-B01.md`, which are the
+  architect's to rule on: D-005, D-008, D-009, D-010, D-011, D-014, and
+  whether to shorten the acknowledgement timeout.
+- A pulldown on GPIO 12 before the beacon clusters are soldered, because it
+  is the MTDI strapping pin and a floating gate stops the board booting.
 
 ## Later seasons, as sketched in concept.md
 

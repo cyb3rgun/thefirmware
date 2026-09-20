@@ -18,15 +18,15 @@ Measured on the build machine, 20 September 2026.
 | Item | Value |
 | --- | --- |
 | `idf.py --version` | ESP-IDF v5.5.2 |
-| module image | 716 KB, 53 percent of the app partition free |
-| pistolstub image | 682 KB, 55 percent free |
-| cambench image | 201 KB, 87 percent free |
+| module image | 718096 bytes, 53 percent of the app partition free |
+| pistolstub image | 699008 bytes, 54 percent free |
+| cambench image | 206224 bytes, 87 percent free |
 | host unit tests | 27 tests, 0 failures |
 
 ### 1. Shot to acknowledgement round trip
 
-Not yet measured. No board was attached to the build machine during this
-pass, so nothing was flashed. The firmware and the method are ready.
+Measured 20 September 2026. Module on COM7, pistol stub on a power bank at
+the stated distance, run started and read over the radio (D-014).
 
 What is measured: the time from the pistol stub's first transmission of a
 shot to the arrival of the module's unicast acknowledgement, in
@@ -38,17 +38,56 @@ The numbers come off the board. The pistol stub keeps them itself and prints
 a summary when the run completes, so there is no stopwatch and no host clock
 in the path.
 
-| Distance | Shots | Median us | p95 us | Loss | Resends | RSSI dBm |
-| --- | --- | --- | --- | --- | --- | --- |
-| 1 m | 100 | | | | | |
-| 3 m | 100 | | | | | |
-| 5 m | 100 | | | | | |
+RSSI is given as the module's acknowledgement heard at the pistol, then the
+pistol's shots heard at the module.
 
-Acceptance from S01-B01: 100 shots at 3 m with zero loss after resends.
+| Distance | Shots | Median us | p95 us | Loss | Resends | RSSI dBm | Mean us | Min us | Max us |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 1 m | 100 | 2673 | 5753 | 0 percent | 0 | -61 / -61 | 3653 | 2356 | 17375 |
+| 3 m | 100 | 2591 | 4699 | 0 percent | 0 | -65 / -64 | 2789 | 2351 | 5621 |
+| 5 m, wall in the path | 100 | 2619 | 22407 | 0 percent | 12 | -89 / -88 | 5138 | 2377 | 42438 |
+
+Acceptance from S01-B01, 100 shots at 3 m with zero loss after resends: met,
+and with no resend needed at all.
+
+Three things in this table are worth more than the pass mark.
+
+The median does not move with distance. 2673, 2591, 2619 microseconds across
+1, 3 and 5 m, while the signal falls 28 dB. A shot that gets through gets
+through at the same speed, and `concept.md` principle 1, single digit
+milliseconds on the radio, holds at every distance measured.
+
+The tail is set by the resend timeout, not by the radio. At 5 m twelve shots
+of a hundred needed a resend, and p95 jumped from 4699 to 22407
+microseconds. That is the 20000 microsecond
+`CONFIG_CGPISTOL_ACK_TIMEOUT_MS` plus one median, almost to the
+microsecond. The link did not slow down; the pistol waited out a timeout
+that was set nearly eight times the median round trip. See the note below.
+
+The 5 m row has a wall in the path, not clear line of sight, which is where
+the 24 dB step between 3 m and 5 m comes from. Free space over that distance
+would cost about 4 dB. The row is a wall measurement and should not be read
+as a distance measurement.
+
+#### The acknowledgement timeout is worth shortening
+
+`CONFIG_CGPISTOL_ACK_TIMEOUT_MS` is 20 ms. It was chosen before any number
+existed, on the reasoning that the round trip would be single digit
+milliseconds and 20 ms was therefore generous. The measurements say the
+median is 2.6 ms and the worst clean round trip seen at 3 m was 5.6 ms, so
+20 ms is not generous, it is idle waiting: a shot that is going to fail has
+already failed by about 6 ms.
+
+At 8 ms the 5 m p95 would fall to roughly 11 ms instead of 22 ms, the four
+transmissions of one shot would fit in 32 ms instead of 80 ms, and nothing
+about the zero loss result would change, because every resend that
+succeeded did so on the following attempt. This is a one line menuconfig
+change and it is left to the architect rather than made here, since 20 ms
+was a deliberate choice and the pass did not ask for it to be revisited.
 
 ### 2. Forwarded frames against heard shots
 
-Not yet measured. Same reason.
+Measured 20 September 2026, from the same runs as section 1.
 
 What is measured: that the module forwards exactly one `shot` frame per
 distinct shot it heard, with no duplicates and none missing. A pistol
@@ -59,11 +98,18 @@ forwarded (D-010).
 `shots heard` and `shots acked` are read from the module's `status` message.
 `frames` is what `tools/cgusb_host.py monitor` counted on the port.
 
-| Distance | Shots fired | Shots heard | Frames forwarded | Frames acked by the host | Duplicates dropped |
+| Distance | Shots fired | Shots heard | Frames forwarded | Frames acked by the host | Heard but not forwarded |
 | --- | --- | --- | --- | --- | --- |
-| 1 m | 100 | | | | |
-| 3 m | 100 | | | | |
-| 5 m | 100 | | | | |
+| 1 m | 100 | 100 | 100 | 100 | 0 |
+| 3 m | 100 | 100 | 100 | 100 | 0 |
+| 5 m, wall in the path | 100 | 100 | 100 | 100 | 0 |
+
+Exact at every distance, including the 5 m run where twelve shots were
+transmitted more than once. The pistol resent those twelve, the module
+acknowledged every copy on the radio and forwarded each shot once, and the
+hundred distinct pistol sequence numbers arrived as a hundred frames. That
+is D-010 doing its job, and it is the acceptance line "forwarded frames
+equal heard shots".
 
 ### 3. Camera object count
 
@@ -99,54 +145,63 @@ rows wait.
 
 ## How to run the bench
 
-Three boards, three ports. Confirm which port is which before flashing;
+Ports on the founder's machine, 20 September 2026: the module is COM7 and
+the pistol stub is COM6 when it is plugged in at all. Confirm before
+flashing rather than trusting this line; the briefing's example said the
+opposite way round.
+
 `erase-flash` is only needed when NVS or the partition layout changes, and
-it wipes the stored channel and the pairings.
+it wipes the stored channel and the pairings. Nothing in this pass needed
+it.
 
 ### Round trip and forwarding, sections 1 and 2
 
-1. Flash the module and the pistol stub. The channel must match on both.
-   The module keeps its channel in NVS and takes it from the core; the stub
-   takes it from menuconfig.
+The pistol needs no cable. Everything is started and read on the module's
+port (D-014), which is what makes a 5 m run possible at all: the moment you
+unplug the pistol to carry it away, its serial port is gone.
+
+1. Flash both boards once. The channel must match; both default to 1.
 
    ```
-   tools\cgflash.ps1 module COM6 build flash monitor
-   tools\cgflash.ps1 pistolstub COM7 build flash monitor
+   tools\cgflash.ps1 module COM7 build flash
+   tools\cgflash.ps1 pistolstub COM6 build flash
    ```
 
-2. Open the module's port with the host tool, which stands in for theclient
-   until B04 exists. It says `hello`, acknowledges every `shot`, and prints
-   what comes back. Non frame bytes are printed as text, so the boot log is
-   readable rather than a nuisance (D-006).
+2. Unplug the pistol, put it on a power bank, and place it at the distance.
+   It does nothing until it is told to, because `CONFIG_CGPISTOL_AUTOFIRE`
+   is off by default.
+
+3. Run the measurement. The script is the core: it says hello, sets the
+   beacons, starts the run over the radio, acknowledges every forwarded
+   shot, and prints both table rows when the pistol's report comes back.
 
    ```
-   python tools/cgusb_host.py monitor COM6 --beacons 0x0F --mode 0 --poll 5
+   python tools/bench_s01.py --module COM7 --distance "3 m"
    ```
 
-3. Put the two boards at 1 m. Hold PRG on the stub for a second to reset the
-   statistics and start a run. The stub fires five shots a second and prints
-   the summary after 100 shots.
+   Add `--verbose` to see the module's log between the frames, `--shots`
+   and `--rate` to change the run, and `--mode 1 --period 40 --slot 1` for
+   multiplex instead of steady beacons.
 
-4. Read the summary off the stub's serial output into the table. Read
-   `shots heard` and `shots acked` off the module's `status` line, which the
-   `--poll 5` above asks for every five seconds.
+4. Move the pistol and run it again. Nothing needs reflashing or resetting
+   between distances.
 
-5. Repeat at 3 m and 5 m. Note the RSSI the stub reports; it is the
-   module's acknowledgement as heard by the stub.
-
-For multiplex mode, pass `--mode 1 --period 40 --slot 1` instead, and make
-sure `CONFIG_CGPISTOL_SLOT` on the stub matches the slot the module is on.
-See D-009 for the slot count, which is still a build time value.
+If the pistol never reports, the three things worth checking, in order: it
+is powered and its display is lit; both boards are on the same channel, which
+the module's own `status` line gives as `ch=`; and the run id is not
+repeating, which it cannot since the fix of 20 September but which is what
+the failure looked like the first time.
 
 ### Camera, section 3
 
 1. Check the wiring before power. The pin numbers are the module's own and
-   the list is in `components/cgcam/include/cgcam.h`. VDDMA is 3.3 V and the
-   part dies above 3.96 V, so the 5 V beacon supply must not reach it. Both
-   pin 14 and pin 20 are grounds and both are required.
+   the list is in `components/cgcam/include/cgcam.h` and in `concept.md`
+   section 5. VDDMA is 3.3 V and the part dies above 3.96 V, so the 5 V
+   beacon supply must not reach it. Both pin 14 and pin 20 are grounds and
+   both are required.
 
    ```
-   tools\cgflash.ps1 cambench COM8 build flash monitor
+   tools\cgflash.ps1 cambench COM6 build flash monitor
    ```
 
 2. The firmware sweeps the transaction encodings and the register space on
