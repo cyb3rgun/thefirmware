@@ -1,0 +1,59 @@
+menu "CYB3RGUN pistol stub"
+
+config CGPISTOL_CHANNEL
+    int "Fixed 2.4 GHz channel"
+    range 1 13
+    default 1
+    help
+        Must match the module's channel. The module keeps its channel in
+        NVS and takes it from the core; the stub has no core, so it is set
+        here.
+
+config CGPISTOL_SLOT
+    int "Slot this stub aims at"
+    range 0 32
+    default 1
+    help
+        The multiplex slot the pistol believes it identified. 0 means no
+        beacons were identified, which every module acknowledges and
+        forwards as unaimed.
+
+config CGPISTOL_AUTOFIRE
+    bool "Fire on a timer as well as on the button"
+    default y
+    help
+        A bench run needs a steady stream of shots. Turn this off to fire
+        only with the PRG button.
+
+config CGPISTOL_RATE_MS
+    int "Milliseconds between shots when firing on the timer"
+    range 10 60000
+    default 200
+    help
+        200 ms is five shots a second, so a run of 100 shots takes about
+        twenty seconds.
+
+config CGPISTOL_ACK_TIMEOUT_MS
+    int "Milliseconds to wait for the module's acknowledgement"
+    range 2 1000
+    default 20
+    help
+        concept.md principle 1 puts the radio round trip in single digit
+        milliseconds, so 20 ms is generous and still lets all four
+        transmissions of one shot finish inside 80 ms.
+
+config CGPISTOL_RUN_SHOTS
+    int "Shots per run, 0 to never summarise"
+    range 0 100000
+    default 100
+    help
+        The summary is printed when the run completes. S01-B01 asks for
+        100 shots per distance.
+
+config CGPISTOL_TRACE
+    bool "Print one line per shot"
+    default n
+    help
+        Useful when a single exchange misbehaves, too noisy for a run.
+
+endmenu
