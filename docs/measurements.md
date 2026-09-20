@@ -46,6 +46,7 @@ pistol's shots heard at the module.
 | 1 m | 100 | 2673 | 5753 | 0 percent | 0 | -61 / -61 | 3653 | 2356 | 17375 |
 | 3 m | 100 | 2591 | 4699 | 0 percent | 0 | -65 / -64 | 2789 | 2351 | 5621 |
 | 5 m, wall in the path | 100 | 2619 | 22407 | 0 percent | 12 | -89 / -88 | 5138 | 2377 | 42438 |
+| 5 m, same spot, 8 ms timeout | 100 | 2683 | 10495 | 0 percent | 16 | -89 | | | |
 
 Acceptance from S01-B01, 100 shots at 3 m with zero loss after resends: met,
 and with no resend needed at all.
@@ -69,21 +70,61 @@ the 24 dB step between 3 m and 5 m comes from. Free space over that distance
 would cost about 4 dB. The row is a wall measurement and should not be read
 as a distance measurement.
 
-#### The acknowledgement timeout is worth shortening
+#### The acknowledgement timeout, shortened and measured
 
-`CONFIG_CGPISTOL_ACK_TIMEOUT_MS` is 20 ms. It was chosen before any number
-existed, on the reasoning that the round trip would be single digit
-milliseconds and 20 ms was therefore generous. The measurements say the
-median is 2.6 ms and the worst clean round trip seen at 3 m was 5.6 ms, so
-20 ms is not generous, it is idle waiting: a shot that is going to fail has
-already failed by about 6 ms.
+`CONFIG_CGPISTOL_ACK_TIMEOUT_MS` was 20 ms, chosen before any number
+existed on the reasoning that the round trip would be single digit
+milliseconds and 20 ms was therefore generous. The first three rows said
+otherwise: the median is 2.6 ms and the worst clean round trip at 3 m was
+5.6 ms, so 20 ms was not generous, it was idle waiting. A shot that is
+going to fail has already failed by about 6 ms.
 
-At 8 ms the 5 m p95 would fall to roughly 11 ms instead of 22 ms, the four
-transmissions of one shot would fit in 32 ms instead of 80 ms, and nothing
-about the zero loss result would change, because every resend that
-succeeded did so on the following attempt. This is a one line menuconfig
-change and it is left to the architect rather than made here, since 20 ms
-was a deliberate choice and the pass did not ask for it to be revisited.
+The architect set it to 8 ms and the 5 m run was repeated from the same
+spot, against the same wall, with the same firmware otherwise. RSSI came
+back at -89 dBm both times, which is the evidence that the position really
+was the same.
+
+| | Median us | p95 us | Loss | Resends |
+| --- | --- | --- | --- | --- |
+| 20 ms | 2619 | 22407 | 0 percent | 12 |
+| 8 ms | 2683 | 10495 | 0 percent | 16 |
+
+The prediction and the measurement agree closely enough to be worth
+stating: 8000 plus one median of 2683 is 10683 microseconds, against a
+measured p95 of 10495. The tail is one timeout plus one median, and
+nothing else.
+
+The resend count rose from 12 to 16, and that is the change working rather
+than a regression. A first attempt that would have been answered at 10 ms
+now becomes a resend instead of a slow success. Loss stayed at zero because
+every resend still succeeded on the attempt after, which is the property
+that matters: the cost of the shorter timeout is paid in radio traffic, not
+in lost shots.
+
+#### At a weak signal the loss is all on the uplink
+
+The four counters of the amended `status` show something the old two could
+not. In the 8 ms run the module acknowledged the pistol exactly 100 times
+for 100 shots heard, while the pistol counted 16 resends.
+
+If a resend had been caused by a lost acknowledgement, the module would
+have heard that shot twice and acknowledged it twice, and the count would
+have been 116. It was 100. So all sixteen retransmissions were shots that
+never reached the module at all, and not one acknowledgement was lost on
+the way back.
+
+That is `concept.md` principle 3 showing its shape in the numbers. Shots go
+out as ESP-NOW broadcasts, which get no acknowledgement or retry from the
+WiFi MAC layer underneath. Acknowledgements go back as unicast, which does
+get both. The asymmetry is deliberate and the cost of it lands entirely on
+the pistol to module direction, which is exactly where the pistol's own
+resend logic is there to cover it.
+
+For a close range comparison, the 20 shot check at RSSI -43 counted 22
+acknowledgements to the pistol against 20 shots heard, with 2 resends: at
+that signal both copies of the two resent shots arrived, so the module
+acknowledged each of them twice. The same two counters read the opposite
+way round, and both readings are correct for their distance.
 
 ### 2. Forwarded frames against heard shots
 
@@ -103,6 +144,7 @@ forwarded (D-010).
 | 1 m | 100 | 100 | 100 | 100 | 0 |
 | 3 m | 100 | 100 | 100 | 100 | 0 |
 | 5 m, wall in the path | 100 | 100 | 100 | 100 | 0 |
+| 5 m, same spot, 8 ms timeout | 100 | 100 | 100 | 100 | 0 |
 
 Exact at every distance, including the 5 m run where twelve shots were
 transmitted more than once. The pistol resent those twelve, the module
