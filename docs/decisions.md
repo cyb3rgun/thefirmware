@@ -210,3 +210,57 @@ ESP32-P4 boards of later seasons, which do have the sensor.
 
 If the core needs to tell "no sensor" from "zero degrees" before then, the
 architect is asked for a sentinel value; -128 is free.
+
+## D-012 The PAJ7025R2 register map is missing, so the bench probes for it
+
+Decided in S01-B01. This one is a question, not a decision, and it is the
+one thing in this pass that hardware alone cannot settle.
+
+S01-B01 task 5 says the init sequence follows "the datasheet and the trzy
+reference". The copy of the datasheet on this machine,
+`THEHARDWARE/pixart-paj7025r2_-_pb_v1.3_5134941_11.pdf`, is the real
+PAJ7025R2 Product Datasheet version 1.3 of 21 November 2019, but the file
+holds only pages 1 to 20 of it. Its own table of contents lists the sections
+that matter here well past that end:
+
+| Section | Subject | Page |
+| --- | --- | --- |
+| 6.1.2 | SPI Data Format | 26 |
+| 6.1.3 | SPI Bus Timing Specifications | 29 |
+| 6.1.4 | SPI Single Read Example | 32 |
+| 7.1.1 | Initialization Flow | 33 |
+| 7.1.2 | Initial Settings | 33 |
+| 7.1.3 | Product ID Register | 34 |
+| 7.3.2 | Registers Bank Switching | 40 |
+| 7.4 | Output Access | 42 |
+
+No trzy reference is in the tree either. Without those pages nobody can say
+how a register read is framed, where the product ID lives, how a bank is
+selected, or how the object data is laid out. Writing a register map from
+memory would produce a bench that looks like it works and reports numbers
+nobody can trust, which is worse than a bench that says it does not know.
+
+What pages 1 to 20 do give is real and is used: the pin assignment of table
+1, the supply and logic levels of tables 2 to 4, and the reference circuit
+of figure 13. Those are in the header of `components/cgcam` and in the
+checklist the bench prints. Two of them are worth repeating here, because
+they destroy hardware rather than merely failing:
+
+- VDDMA takes 2.0 to 3.6 V and dies above 3.96 V, and every signal pin is
+  limited to VDDMA + 0.3 V. The 5 V supply that feeds the beacon clusters
+  must never reach this module. At 3.3 V no level shifter is needed in
+  either direction.
+- Pin 14 VSSD and pin 20 VSSD_LED are both required grounds. A module wired
+  to only one of them looks powered and answers nothing.
+
+So `cgcam` asks the silicon instead of guessing. `cgcam_probe` sweeps four
+plausible transaction encodings across the banks and all 256 registers and
+reports every place that answers 0x7025, which pins down the SPI data
+format of section 6.1.2 and the product ID register of section 7.1.3 in one
+run. The object count and the coordinates still need the output access map
+of section 7.4 and are not invented in the meantime.
+
+Asked of the architect and the founder: pages 21 to 57 of this datasheet, or
+the trzy reference the briefing names. With either in hand, the rest of task
+5 is a table of register constants and an afternoon, and none of the code
+around it changes.

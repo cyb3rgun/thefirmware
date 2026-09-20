@@ -1,0 +1,50 @@
+menu "CYB3RGUN camera bench"
+
+config CGCAM_CLOCK_HZ
+    int "SPI clock in Hz"
+    range 100000 14000000
+    default 1000000
+    help
+        The part does 14 MHz on a board, but its pins drive 4 mA into a
+        specified 100 pF, so flying wires get 1 to 2 MHz. concept.md
+        section 5.
+
+config CGCAM_SPI_MODE
+    int "SPI mode"
+    range 0 3
+    default 3
+    help
+        The bus timing section of the datasheet is past the end of the copy
+        in THEHARDWARE, so this is a value to try rather than a value that
+        is known. If the probe finds nothing, try the other three. D-012.
+
+config CGCAM_PROBE_BANKS
+    int "How many register banks the probe sweeps"
+    range 1 32
+    default 16
+    help
+        1 stays on whatever bank the module powers up in and needs no write
+        at all, which is the safest first attempt. More than 1 writes the
+        bank register before each sweep.
+
+config CGCAM_DUMP_REG
+    int "First register of the window the bench reads each frame"
+    range 0 255
+    default 0
+    help
+        Once the output access map of datasheet section 7.4 is in hand, this
+        is where the object data starts.
+
+config CGCAM_DUMP_LEN
+    int "How many bytes the bench reads each frame"
+    range 1 256
+    default 32
+
+config CGCAM_FPS
+    int "Frames per second the bench reads at"
+    range 1 200
+    default 50
+    help
+        S01-B01 task 5 asks for 50. The part itself does up to 200.
+
+endmenu
