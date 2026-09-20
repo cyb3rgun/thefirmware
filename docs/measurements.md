@@ -155,23 +155,27 @@ equal heard shots".
 
 ### 3. Camera object count
 
-Not yet measured, and blocked on more than hardware. See D-012: the copy of
-the PAJ7025R2 datasheet in THEHARDWARE holds only pages 1 to 20, and the SPI
-data format, the product ID register and the output access map are all past
-that end. The object count cannot be read until those pages or the trzy
-reference arrive.
+The bus is measured and confirmed, 21 September 2026. The object count is
+not: the sensor answers, is configured to report up to sixteen objects, and
+has reported none so far, which is an optical question rather than a
+firmware one. See the note below the tables.
 
-What the bench can do today is prove the module is alive and pin down the
-transaction format on real silicon, which is the first row below. The object
-rows wait.
+Wired to the pistol stub's Heltec, since the bench has two boards and not
+three. Flashing cambench onto it replaces the pistolstub firmware, so the
+radio bench and the camera bench cannot run at the same time on this bench.
 
 | Subject | Result |
 | --- | --- |
-| Product ID 0x7025 answers | |
-| SPI transaction encoding that worked | |
-| Bank and register holding the ID | |
-| SPI mode that worked | |
+| Product ID 0x7025 answers | yes |
+| SPI transaction encoding that worked | command byte, then register, then data: 0x00 write, 0x80 read, 0x81 burst read |
+| Bit order | LSB first |
+| Bank and register holding the ID | bank 0, 0x02 low and 0x03 high |
+| SPI mode that worked | mode 3 |
 | SPI clock | 1 MHz on flying wires |
+| Chip select | held across a bank switch and the operation after it |
+| Sensor frame period reported | 4978 us, about 200 fps |
+| Settings read back | 16 objects, area max 0x2585, noise 0x0A, gain 0x10, exposure 0x2000 |
+| Decoupling actually fitted | 100 uF electrolytic only, no 0.1 uF ceramic |
 
 | Source | Distance | Objects seen | Notes |
 | --- | --- | --- | --- |
@@ -184,6 +188,31 @@ rows wait.
 | One beacon cluster | 1 m | | once soldered |
 | One beacon cluster | 2 m | | once soldered |
 | One beacon cluster | 3 m | | once soldered |
+
+#### Nothing detected yet, and what that does and does not mean
+
+Over ninety seconds of capture with a television remote, the sensor
+reported sixteen empty object slots in every frame. The raw report is the
+evidence that this is a real answer rather than a parsing mistake: slot 0
+reads `00 00 FF 0F FF 0F 00 00 00 7F 7F 7F 7F 00 00 00` every time, which
+is an area of zero and a centre parked at 0x0FFF, the far corner. That is
+the sensor saying "this slot is empty" in well formed language, and 128 of
+the 256 bytes are non zero in exactly the pattern sixteen empty slots
+produce.
+
+So the firmware, the bus and the parse are all doing their job. What has
+not been established is whether anything actually reached the lens: the
+captures ran on a fixed window and it is not recorded whether a source was
+held in front of the sensor during them.
+
+The decoupling is the standing suspicion for when a source has definitely
+been presented. The datasheet asks for 0.1 uF and 10 uF at the module pins
+and only a 100 uF electrolytic was available. An electrolytic has a high
+equivalent series resistance and is close to useless at high frequency,
+which matters far more to the imaging front end than to a 1 MHz SPI link.
+That would explain the shape of what is seen exactly: digital
+communication perfect, imaging dead. A 0.1 uF ceramic across VDDMA and GND
+at the module pins is the first thing to try.
 
 ## How to run the bench
 

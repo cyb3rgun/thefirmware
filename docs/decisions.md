@@ -427,13 +427,38 @@ The initial settings are a flat list of register writes in
 hardware configuration values rather than a program, and the list is flat on
 purpose so that nobody reorders it.
 
-**This is a claim until the part agrees with it.** Everything above was read
-out of somebody else's driver for a different board and a different
-toolchain, and the camera board on this bench is not wired yet.
-`cgcam_probe` sweeps the banks for the product ID and is kept for exactly
-that: the first run on real silicon either confirms the map or says which
-part of it is wrong. Until that run happens the camera rows of
-`docs/measurements.md` stay empty.
+**Confirmed on silicon, 21 September 2026.** Everything above was read out
+of somebody else's driver for a different board and a different toolchain,
+so it was a claim until the part agreed. It agrees. The first run on the
+wired bench answered:
+
+```
+cgcam: SPI up: sck 22 miso 17 mosi 23 cs 21, 1000000 Hz, mode 3, LSB first
+cambench: PAJ7025R2 answered, product id 0x7025
+cambench: sensor frame period 4978 us, about 200 fps
+```
+
+All three of the things that had to be right together are right: mode 3,
+LSB first, and the command byte before the register. The frame period is a
+plausible 200 fps read out of bank 0x0C, so the bank switching works too,
+and a format 1 report comes back well formed at 256 bytes.
+
+The sensitivity registers, also from the reference and also confirmed by
+reading them back:
+
+| Bank | Register | Subject |
+| --- | --- | --- |
+| 0 | 0x0B and 0x0C | area max threshold |
+| 0 | 0x0F | noise threshold |
+| 0 | 0x19 | maximum number of objects |
+| 1 | 0x05 and 0x06 | sensor gain |
+| 1 | 0x0E and 0x0F | exposure length |
+
+The bench reads them at boot, because a report of nothing means one of two
+very different things and these tell them apart: a dark room, or a sensor
+that has been told to report nothing. On this board they come back at 16
+objects, area max 0x2585, noise 0x0A, gain 0x10, exposure 0x2000, which is
+a sensor willing to report.
 
 Still wanted, and still worth having: pages 21 to 57 of the datasheet. The
 reference gives the values but not the reasoning, and a bench that has to

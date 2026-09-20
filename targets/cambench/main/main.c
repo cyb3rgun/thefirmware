@@ -123,6 +123,33 @@ static void bench_task(void *arg)
         }
         ESP_LOGI(TAG, "%s", line);
 
+        /* When nothing is in view, say what the sensor actually returned.
+         * A report that is entirely one value means nothing reached the
+         * sensor; a report with structure in it means the parse above threw
+         * away something real, and those are very different faults. */
+        if (frame.count == 0) {
+            uint8_t raw[256];
+            if (cgcam_read_report(raw, CGCAM_FORMAT_1) == ESP_OK) {
+                int nonzero = 0;
+                uint8_t high = 0;
+                for (size_t i = 0; i < sizeof(raw); i++) {
+                    if (raw[i] != 0) {
+                        nonzero++;
+                    }
+                    if (raw[i] > high) {
+                        high = raw[i];
+                    }
+                }
+                ESP_LOGI(TAG,
+                         "  raw: %d of 256 bytes non zero, highest 0x%02X, slot0 %02X %02X "
+                         "%02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X "
+                         "%02X",
+                         nonzero, high, raw[0], raw[1], raw[2], raw[3], raw[4], raw[5],
+                         raw[6], raw[7], raw[8], raw[9], raw[10], raw[11], raw[12], raw[13],
+                         raw[14], raw[15]);
+            }
+        }
+
         if (cgoled_present()) {
             cgoled_clear();
             cgoled_text(0, 0, "CYB3RGUN CAMBENCH");
@@ -177,6 +204,33 @@ void app_main(void)
     }
 
     ESP_LOGI(TAG, "PAJ7025R2 answered, product id 0x%04X", g.product_id);
+
+    /* What the sensor is actually set to. A report of nothing can mean a
+     * dark room or a sensor told to report nothing, and these tell the two
+     * apart. Register addresses from D-015. */
+    {
+        uint8_t area_lo = 0, area_hi = 0, noise = 0, max_objects = 0;
+        uint8_t gain1 = 0, gain2 = 0, exp_lo = 0, exp_hi = 0;
+
+        cgcam_read_reg(0x00, 0x0B, &area_lo);
+        cgcam_read_reg(0x00, 0x0C, &area_hi);
+        cgcam_read_reg(0x00, 0x0F, &noise);
+        cgcam_read_reg(0x00, 0x19, &max_objects);
+        cgcam_read_reg(0x01, 0x05, &gain1);
+        cgcam_read_reg(0x01, 0x06, &gain2);
+        cgcam_read_reg(0x01, 0x0E, &exp_lo);
+        cgcam_read_reg(0x01, 0x0F, &exp_hi);
+
+        ESP_LOGI(TAG, "settings: max objects %u, area max threshold 0x%04X, noise 0x%02X",
+                 max_objects, (unsigned)((area_hi << 8) | area_lo), noise);
+        ESP_LOGI(TAG, "settings: gain 0x%02X 0x%02X, exposure 0x%04X", gain1, gain2,
+                 (unsigned)((exp_hi << 8) | exp_lo));
+
+        if (max_objects == 0) {
+            ESP_LOGE(TAG, "max objects is 0: the sensor is set to report nothing,");
+            ESP_LOGE(TAG, "whatever is in front of it. That is the fault, not the room.");
+        }
+    }
 
     if (cgcam_frame_period_us(&g.frame_period_us) == ESP_OK) {
         ESP_LOGI(TAG, "sensor frame period %" PRIu32 " us, about %" PRIu32 " fps",
