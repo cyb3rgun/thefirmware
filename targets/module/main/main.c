@@ -781,6 +781,15 @@ void app_main(void)
     g.slot = CONFIG_CGMODULE_SLOT;
     g.next_seq = 1;
 
+    /* The run id must not restart at a fixed number when the module is
+     * reset, because the pistol drops a start whose run id it has already
+     * seen and the pistol is not reset between runs. A counter from zero
+     * made every run id 1, so the first bench run after a module reset
+     * worked and every later one was silently discarded at the pistol.
+     * Seeding from the hardware generator makes a repeat a one in 65536
+     * accident instead of a certainty. D-014. */
+    g.bench_run_id = (uint16_t)esp_random();
+
     ESP_ERROR_CHECK(esp_read_mac(g.mac, ESP_MAC_WIFI_STA));
 
     s_pending_lock = xSemaphoreCreateMutex();
