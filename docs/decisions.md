@@ -460,7 +460,7 @@ not have to diff two documents to find out.
 | the acknowledgement timeout is 8 ms | `CONFIG_CGPISTOL_ACK_TIMEOUT_MS` |
 
 One thing the amendment leaves open, and thefirmware has made a choice that
-is easy to change. `concept.md` section 3 says start is "acknowledged by the
+is now confirmed. `concept.md` section 3 says start is "acknowledged by the
 stub, resent by the module until acknowledged" without saying what the
 acknowledgement looks like. thefirmware sends a `start_ack` at type 0xF2,
 inside the bench range and on the radio only, carrying the pistol's mac and
