@@ -21,6 +21,8 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
+#include "driver/gpio.h"
+
 #include "cgcam.h"
 #include "cgoled.h"
 
@@ -188,6 +190,30 @@ void app_main(void)
     ESP_ERROR_CHECK(cgcam_init(&cam));
 
     const esp_err_t id_err = cgcam_product_id(&g.product_id);
+
+    /* A silent bus reads 0x0000 for several different faults. An internal
+     * pull up on MISO tells two of them apart: if the line is floating,
+     * because a wire is off or the module is unpowered, the reading turns
+     * to 0xFFFF. If something is actively holding it down it stays at
+     * 0x0000. One flash, and it says whether the module is there at all. */
+    if (id_err != ESP_OK) {
+        uint16_t pulled = 0;
+        gpio_set_pull_mode((gpio_num_t)cam.miso_gpio, GPIO_PULLUP_ONLY);
+        vTaskDelay(pdMS_TO_TICKS(5));
+        cgcam_product_id(&pulled);
+        ESP_LOGW(TAG, "MISO test: 0x%04X without a pull up, 0x%04X with one",
+                 g.product_id, pulled);
+        if (pulled == 0xFFFF) {
+            ESP_LOGW(TAG, "  the line floats: a wire is off, or the module has no power");
+        } else if (pulled == 0x0000) {
+            ESP_LOGW(TAG, "  the line is held down: the module is powered and driving it,");
+            ESP_LOGW(TAG, "  or MISO is shorted to ground");
+        } else {
+            ESP_LOGW(TAG, "  the line answers something: the module is alive, the bus is not");
+        }
+        gpio_set_pull_mode((gpio_num_t)cam.miso_gpio, GPIO_FLOATING);
+    }
+
     if (id_err != ESP_OK) {
         /* Before giving up, ask every bank, in case the map moved. */
         uint8_t bank = 0;
